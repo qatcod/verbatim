@@ -20,8 +20,10 @@ from rich.progress import (
 from rich.table import Table
 
 from . import __version__, state, store
+from . import reconcile as reconcile_lib
 from .connectors import github_pr, slack_api, slack_export
 from .extractor import DEFAULT_MODEL, extract
+from .projections import linear as linear_proj
 from .renderers import to_json, to_markdown
 from .transcripts import load_transcript
 
@@ -34,6 +36,9 @@ app = typer.Typer(
 
 query_app = typer.Typer(name="query", help="Read accumulated state from the local store.")
 app.add_typer(query_app)
+
+project_app = typer.Typer(name="project", help="Push extracted state to external trackers.")
+app.add_typer(project_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -606,15 +611,20 @@ def query_commitments(
         help="Minimum confidence: low | medium | high.",
     ),
     include_resolved: bool = typer.Option(False, "--all", help="Include resolved items."),
+    ungrouped: bool = typer.Option(
+        False, "--ungrouped",
+        help="Show every entity individually; do not fold merged siblings into canonicals.",
+    ),
     limit: int = typer.Option(100, "--limit", "-n"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
-    """List commitments."""
+    """List commitments. By default, merged duplicates are folded into canonicals."""
     conn = state.open_db(db)
     try:
         items = state.list_commitments(
             conn, actor=actor, min_confidence=min_confidence,
             status=None if include_resolved else "open",
+            canonical_only=not ungrouped,
             limit=limit,
         )
     finally:
@@ -629,15 +639,17 @@ def query_commitments(
 def query_decisions(
     min_confidence: str | None = typer.Option(None, "--min-confidence", "-c"),
     include_resolved: bool = typer.Option(False, "--all"),
+    ungrouped: bool = typer.Option(False, "--ungrouped"),
     limit: int = typer.Option(100, "--limit", "-n"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
-    """List decisions."""
+    """List decisions. By default, merged duplicates are folded into canonicals."""
     conn = state.open_db(db)
     try:
         items = state.list_decisions(
             conn, min_confidence=min_confidence,
             status=None if include_resolved else "open",
+            canonical_only=not ungrouped,
             limit=limit,
         )
     finally:
@@ -652,14 +664,16 @@ def query_decisions(
 def query_open_questions(
     raised_by: str | None = typer.Option(None, "--raised-by"),
     min_confidence: str | None = typer.Option(None, "--min-confidence", "-c"),
+    ungrouped: bool = typer.Option(False, "--ungrouped"),
     limit: int = typer.Option(100, "--limit", "-n"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
-    """List open questions."""
+    """List open questions. By default, merged duplicates are folded into canonicals."""
     conn = state.open_db(db)
     try:
         items = state.list_open_questions(
-            conn, raised_by=raised_by, min_confidence=min_confidence, limit=limit,
+            conn, raised_by=raised_by, min_confidence=min_confidence,
+            canonical_only=not ungrouped, limit=limit,
         )
     finally:
         conn.close()
@@ -673,13 +687,17 @@ def query_open_questions(
 def query_blockers(
     owner: str | None = typer.Option(None, "--owner"),
     min_confidence: str | None = typer.Option(None, "--min-confidence", "-c"),
+    ungrouped: bool = typer.Option(False, "--ungrouped"),
     limit: int = typer.Option(100, "--limit", "-n"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
-    """List blockers."""
+    """List blockers. By default, merged duplicates are folded into canonicals."""
     conn = state.open_db(db)
     try:
-        items = state.list_blockers(conn, owner=owner, min_confidence=min_confidence, limit=limit)
+        items = state.list_blockers(
+            conn, owner=owner, min_confidence=min_confidence,
+            canonical_only=not ungrouped, limit=limit,
+        )
     finally:
         conn.close()
     if not items:
@@ -765,6 +783,470 @@ def version() -> None:
     console.print(f"verbatim {__version__}")
 
 
+# ----------------------- project (push to external trackers) -----------------------
+
+
+@project_app.command("linear")
+def project_linear_cmd(
+    team: str = typer.Option(
+        ..., "--team",
+        help="Linear team name or key (e.g. 'Engineering' or 'ENG'). Required.",
+    ),
+    api_key: str | None = typer.Option(
+        None, "--api-key", envvar="LINEAR_API_KEY",
+        help="Linear personal API key. Reads $LINEAR_API_KEY if not passed.",
+    ),
+    workflow_state: str | None = typer.Option(
+        None, "--state",
+        help="Workflow state name (e.g. 'Backlog' or 'Todo'). Defaults to Linear's team default.",
+    ),
+    min_confidence: str = typer.Option(
+        "high", "--min-confidence", "-c",
+        help="Only project commitments at this confidence or higher. Default: high.",
+    ),
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Stop after this many issues."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without creating issues."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Push pending Verbatim commitments out as Linear issues. Idempotent."""
+    if not api_key:
+        err_console.print("[red]Linear API key required.[/red] Set $LINEAR_API_KEY or pass --api-key.")
+        raise typer.Exit(code=2)
+
+    try:
+        client = linear_proj.LinearClient(api_key=api_key)
+    except ValueError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from None
+
+    with client:
+        try:
+            teams = client.list_teams()
+        except Exception as e:  # noqa: BLE001
+            err_console.print(f"[red]Linear API call failed listing teams: {e}[/red]")
+            raise typer.Exit(code=1) from None
+
+        team_match = _match_team(teams, team)
+        if team_match is None:
+            err_console.print(
+                f"[red]No team matched '{team}'. Available: "
+                f"{', '.join(t['name'] for t in teams)}[/red]"
+            )
+            raise typer.Exit(code=1)
+
+        state_id: str | None = None
+        if workflow_state:
+            states = client.list_workflow_states(team_match["id"])
+            ws = _match_workflow_state(states, workflow_state)
+            if ws is None:
+                err_console.print(
+                    f"[red]No workflow state matched '{workflow_state}' in team "
+                    f"'{team_match['name']}'. Available: {', '.join(s['name'] for s in states)}[/red]"
+                )
+                raise typer.Exit(code=1)
+            state_id = ws["id"]
+
+        try:
+            users = client.list_users()
+        except Exception as e:  # noqa: BLE001
+            err_console.print(f"[yellow]Couldn't fetch Linear users for assignee resolution: {e}[/yellow]")
+            users = []
+        resolver = linear_proj.build_user_resolver(users)
+
+        conn = state.open_db(db)
+        try:
+            commitments = state.list_commitments(
+                conn, min_confidence=min_confidence, limit=limit or 200,
+            )
+            plans = [linear_proj.plan_projection(conn, c, assignee_resolver=resolver) for c in commitments]
+            pending = [p for p in plans if not p.skip_reason]
+            skipped = [p for p in plans if p.skip_reason]
+            if limit is not None:
+                pending = pending[:limit]
+
+            if not pending:
+                err_console.print(
+                    f"[yellow]No commitments to project.[/yellow] "
+                    f"({len(skipped)} skipped — already projected or non-canonical)"
+                )
+                return
+
+            if dry_run:
+                _print_linear_dry_run(pending, skipped, team_match, workflow_state)
+                return
+
+            created: list[dict[str, Any]] = []
+            for plan in pending:
+                try:
+                    info = linear_proj.execute_projection(
+                        conn, client, plan,
+                        team_id=team_match["id"], state_id=state_id,
+                    )
+                    created.append(info)
+                    err_console.print(
+                        f"[green]✓[/green] {info.get('identifier') or '?'}: {plan.draft.title[:60]}"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    err_console.print(f"[red]  failed for entity {plan.entity['id'][:8]}: {e}[/red]")
+        finally:
+            conn.close()
+
+    body = (
+        f"[bold]Created {len(created)} Linear issue(s)[/bold]\n"
+        f"[dim]skipped (already-projected/merged): {len(skipped)}  ·  team: {team_match['name']}[/dim]"
+    )
+    err_console.print(Panel(body, title="linear projection complete", border_style="green", expand=False))
+
+
+@project_app.command("status")
+def project_status_cmd(
+    target: str = typer.Option("linear_issue", "--target", help="Projection target kind to filter."),
+    show_inactive: bool = typer.Option(False, "--all", help="Include inactive projections."),
+    limit: int = typer.Option(100, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """List active projections — what's been pushed where."""
+    conn = state.open_db(db)
+    try:
+        projections = store.list_projections(
+            conn,
+            target_kind=target,
+            status=None if show_inactive else "active",
+            limit=limit,
+        )
+    finally:
+        conn.close()
+    if not projections:
+        console.print("[dim]No projections found.[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("projection id", style="dim")
+    table.add_column("kind")
+    table.add_column("entity")
+    table.add_column("external")
+    table.add_column("url")
+    table.add_column("status")
+    for p in projections:
+        meta = p.get("metadata") or {}
+        ext = meta.get("identifier") or (p["external_id"] or "")[:10]
+        table.add_row(
+            p["id"][:8] + "…",
+            p.get("entity_kind") or "—",
+            f"{p.get('primary_actor') or '?'}: {(p.get('primary_topic') or '')[:40]}",
+            ext,
+            (p.get("external_url") or "")[:50],
+            p["status"],
+        )
+    console.print(table)
+
+
+@app.command(name="unproject")
+def unproject_cmd(
+    projection_id: str = typer.Argument(..., help="Projection id (or prefix)."),
+    close_external: bool = typer.Option(
+        False, "--close-external",
+        help="Also close/archive the issue in the external system (Linear).",
+    ),
+    api_key: str | None = typer.Option(None, "--api-key", envvar="LINEAR_API_KEY"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Deactivate a projection. The external issue stays unless --close-external is passed."""
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_projection_prefix(conn, projection_id)
+        if full_id is None:
+            err_console.print(f"[red]No projection matches prefix '{projection_id}'.[/red]")
+            raise typer.Exit(code=1)
+        client = None
+        if close_external:
+            if not api_key:
+                err_console.print("[red]--close-external requires $LINEAR_API_KEY or --api-key.[/red]")
+                raise typer.Exit(code=2)
+            client = linear_proj.LinearClient(api_key=api_key)
+        try:
+            changed = linear_proj.deactivate_projection(
+                conn, full_id, client=client, close_linear=close_external,
+            )
+        finally:
+            if client is not None:
+                client.close()
+    finally:
+        conn.close()
+    if changed:
+        msg = "; Linear issue archived" if close_external else ""
+        console.print(f"[green]✓[/green] projection {full_id[:8]}… deactivated{msg}")
+    else:
+        err_console.print("[yellow]No change.[/yellow]")
+
+
+def _match_team(teams: list[dict], query: str) -> dict | None:
+    q = query.lower().strip()
+    for t in teams:
+        if t.get("id") == query:
+            return t
+        if (t.get("name") or "").lower() == q:
+            return t
+        if (t.get("key") or "").lower() == q:
+            return t
+    return None
+
+
+def _match_workflow_state(states: list[dict], query: str) -> dict | None:
+    q = query.lower().strip()
+    for s in states:
+        if s.get("id") == query:
+            return s
+        if (s.get("name") or "").lower() == q:
+            return s
+    return None
+
+
+def _print_linear_dry_run(
+    pending: list[linear_proj.ProjectionPlan],
+    skipped: list[linear_proj.ProjectionPlan],
+    team: dict,
+    workflow_state: str | None,
+) -> None:
+    table = Table(
+        show_header=True, header_style="bold cyan",
+        title=f"Linear projection plan (dry run) — team {team['name']}"
+              + (f" / state {workflow_state}" if workflow_state else ""),
+    )
+    table.add_column("entity")
+    table.add_column("title")
+    table.add_column("assignee")
+    table.add_column("due")
+    for p in pending:
+        d = p.draft
+        table.add_row(
+            p.entity["id"][:8] + "…",
+            d.title[:60] + ("…" if len(d.title) > 60 else ""),
+            "(assigned)" if d.assignee_id else "(unassigned)",
+            d.due_date or "—",
+        )
+    console.print(table)
+    err_console.print(f"[dim]{len(pending)} issues would be created; {len(skipped)} skipped[/dim]")
+
+
+def _resolve_projection_prefix(conn, prefix: str) -> str | None:
+    rows = conn.execute(
+        "SELECT id FROM projections WHERE id LIKE ? LIMIT 2",
+        (prefix + "%",),
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    return None
+
+
+# ----------------------- reconcile / link / unlink / show -----------------------
+
+
+@app.command(name="reconcile")
+def reconcile_cmd(
+    threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD,
+        "--threshold", "-t", min=50, max=100,
+        help=f"Minimum topic similarity (0–100) to auto-merge. Default: {reconcile_lib.DEFAULT_THRESHOLD}.",
+    ),
+    kind: list[str] | None = typer.Option(
+        None, "--kind",
+        help="Restrict to specific kinds: commitment | decision | open_question | blocker.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview merges without writing."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Sweep the state graph and merge entities that look like duplicates.
+
+    Same actor (case-insensitive), same kind, topic similarity ≥ threshold using
+    rapidfuzz token-set comparison. Older canonical wins so audit history reads
+    left-to-right in time.
+    """
+    conn = state.open_db(db)
+    try:
+        if dry_run:
+            preview = _reconcile_preview(conn, threshold=threshold, kinds=kind)
+            _print_reconcile_preview(preview, threshold=threshold)
+            return
+        result = reconcile_lib.reconcile_all(conn, threshold=threshold, kinds=kind)
+    finally:
+        conn.close()
+
+    body = (
+        f"[bold]Linked {result.linked} entities[/bold]\n"
+        f"{result.no_match} had no match · {result.skipped_unchanged} already-merged\n"
+        f"[dim]threshold: {threshold}[/dim]"
+    )
+    err_console.print(Panel(body, title="reconcile complete", border_style="green", expand=False))
+
+
+@app.command(name="link")
+def link_cmd(
+    canonical_id: str = typer.Argument(..., help="The canonical entity (id or prefix). It keeps its identity."),
+    member_id: str = typer.Argument(..., help="The entity to merge into the canonical (id or prefix)."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Manually link two entities — `member` becomes a sibling of `canonical`."""
+    conn = state.open_db(db)
+    try:
+        full_canonical = _resolve_id_prefix(conn, canonical_id)
+        full_member = _resolve_id_prefix(conn, member_id)
+        if full_canonical is None:
+            err_console.print(f"[red]No entity matches canonical prefix '{canonical_id}'.[/red]")
+            raise typer.Exit(code=1)
+        if full_member is None:
+            err_console.print(f"[red]No entity matches member prefix '{member_id}'.[/red]")
+            raise typer.Exit(code=1)
+        try:
+            reconcile_lib.link_entities(conn, canonical_id=full_canonical, member_id=full_member)
+        except ValueError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2) from None
+    finally:
+        conn.close()
+    console.print(f"[green]✓[/green] linked {full_member[:8]}… → {full_canonical[:8]}…")
+
+
+@app.command(name="unlink")
+def unlink_cmd(
+    entity_id: str = typer.Argument(..., help="Entity id (or prefix) to restore as standalone canonical."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Restore a merged entity to standalone-canonical status."""
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_id_prefix(conn, entity_id)
+        if full_id is None:
+            err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
+            raise typer.Exit(code=1)
+        changed = reconcile_lib.unlink_entity(conn, full_id)
+    finally:
+        conn.close()
+    if changed:
+        console.print(f"[green]✓[/green] {full_id[:8]}… is now its own canonical")
+    else:
+        err_console.print(f"[yellow]{full_id[:8]}… was already canonical[/yellow]")
+
+
+@app.command(name="show")
+def show_cmd(
+    entity_id: str = typer.Argument(..., help="Entity id (or prefix) to display."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Show a single entity with all its merged members and source quotes."""
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_id_prefix(conn, entity_id)
+        if full_id is None:
+            err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
+            raise typer.Exit(code=1)
+        entity = state.show_entity(conn, full_id)
+    finally:
+        conn.close()
+
+    if entity is None:
+        err_console.print(f"[red]Entity not found: {full_id}[/red]")
+        raise typer.Exit(code=1)
+
+    _print_entity_detail(entity)
+
+
+def _reconcile_preview(
+    conn,
+    *,
+    threshold: int,
+    kinds: list[str] | None,
+) -> list[tuple[dict, dict, int]]:
+    """Return (entity, candidate, score) tuples that *would* be merged."""
+    pairs: list[tuple[dict, dict, int]] = []
+    target_kinds = kinds or ["commitment", "decision", "open_question", "blocker"]
+    for k in target_kinds:
+        rows = conn.execute(
+            "SELECT id FROM entities WHERE kind = ? AND canonical_id IS NULL "
+            "ORDER BY created_at ASC",
+            (k,),
+        ).fetchall()
+        seen_canonicals: set[str] = set()
+        for r in rows:
+            entity = store.fetch_entity(conn, r["id"])
+            if entity is None or entity["id"] in seen_canonicals:
+                continue
+            matches = reconcile_lib.find_candidates(conn, entity, threshold=threshold, limit=1)
+            if matches:
+                top = matches[0]
+                # Don't preview pairs where the candidate already targets entity
+                if top.candidate["id"] in seen_canonicals:
+                    continue
+                pairs.append((entity, top.candidate, top.score))
+                # Pretend the merge happened so we don't double-suggest for this canonical
+                seen_canonicals.add(top.candidate["id"])
+    return pairs
+
+
+def _print_reconcile_preview(pairs: list[tuple[dict, dict, int]], *, threshold: int) -> None:
+    if not pairs:
+        console.print(f"[dim]No merges would happen at threshold {threshold}.[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold cyan", title=f"Reconcile plan (threshold {threshold})")
+    table.add_column("score", justify="right")
+    table.add_column("kind")
+    table.add_column("would merge")
+    table.add_column("into canonical")
+    for entity, candidate, score in pairs:
+        table.add_row(
+            str(score),
+            entity["kind"],
+            f"{entity['id'][:8]}… {entity.get('primary_topic') or '—'}",
+            f"{candidate['id'][:8]}… {candidate.get('primary_topic') or '—'}",
+        )
+    console.print(table)
+
+
+def _print_entity_detail(entity: dict[str, Any]) -> None:
+    badge = {
+        "high": "[green]high[/green]",
+        "medium": "[yellow]medium[/yellow]",
+        "low": "[red]low[/red]",
+    }.get(entity["confidence"], entity["confidence"])
+    lines = [
+        f"[bold]{entity['kind']}[/bold]  id={entity['id']}",
+        f"confidence: {badge}  ·  status: {entity['status']}",
+    ]
+    if entity.get("canonical_id"):
+        lines.append(f"[dim]merged into canonical: {entity['canonical_id']}[/dim]")
+    if entity.get("merged_count", 0) > 0:
+        lines.append(f"[dim]merged siblings: {entity['merged_count']}[/dim]")
+    payload = entity["payload"]
+    if entity["kind"] == "commitment":
+        lines.append(f"actor: {payload.get('actor') or '—'}")
+        lines.append(f"deliverable: {payload.get('deliverable') or '—'}")
+        if payload.get("deadline"):
+            lines.append(f"deadline: {payload['deadline']}")
+        if payload.get("to"):
+            lines.append(f"to: {payload['to']}")
+    elif entity["kind"] == "decision":
+        lines.append(f"topic: {payload.get('topic') or '—'}")
+        lines.append(f"outcome: {payload.get('outcome') or '—'}")
+        if payload.get("rationale"):
+            lines.append(f"rationale: {payload['rationale']}")
+    elif entity["kind"] == "open_question":
+        lines.append(f"topic: {payload.get('topic') or '—'}")
+        lines.append(f"question: {payload.get('question') or '—'}")
+        if payload.get("raised_by"):
+            lines.append(f"raised_by: {payload['raised_by']}")
+    elif entity["kind"] == "blocker":
+        lines.append(f"blocked_thing: {payload.get('blocked_thing') or '—'}")
+        lines.append(f"blocked_by: {payload.get('blocked_by') or '—'}")
+    lines.append("")
+    lines.append(f"[bold]Sources ({len(entity['sources'])}):[/bold]")
+    for s in entity["sources"]:
+        speaker = f"{s.get('speaker')}: " if s.get("speaker") else ""
+        ts = f"[{s['approximate_timestamp']}] " if s.get("approximate_timestamp") else ""
+        lines.append(f"  > {ts}{speaker}{s['verbatim_quote']}")
+        if s.get("rationale"):
+            lines.append(f"    [dim]rationale: {s['rationale']}[/dim]")
+    console.print("\n".join(lines))
+
+
 # ----------------------- helpers -----------------------
 
 
@@ -844,7 +1326,11 @@ def _print_entity_table(items: list[dict[str, Any]], *, kind: str) -> None:
         quote = (first_quote[:60] + "…") if len(first_quote) > 60 else first_quote
         conf_color = {"high": "green", "medium": "yellow", "low": "red"}.get(item["confidence"], "white")
         conf_cell = f"[{conf_color}]{item['confidence']}[/{conf_color}]"
-        row = [item["id"][:8] + "…", conf_cell]
+        merged = item.get("merged_count", 0)
+        id_cell = item["id"][:8] + "…"
+        if merged:
+            id_cell += f" [dim](+{merged})[/dim]"
+        row = [id_cell, conf_cell]
         if kind == "commitment":
             row += [payload.get("actor") or "—", payload.get("deliverable") or "—", payload.get("deadline") or "—"]
         elif kind == "decision":

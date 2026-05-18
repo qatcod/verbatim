@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import store
+from . import reconcile, store
 from .extractor import ExtractionDiagnostics
 from .schema import (
     Blocker,
@@ -25,6 +25,7 @@ from .schema import (
 class IngestSummary:
     session_id: str
     counts: dict[str, int]
+    reconcile_links: int = 0  # how many newly-saved entities got merged into existing canonicals
 
 
 def open_db(path: str | Path | None = None) -> sqlite3.Connection:
@@ -38,12 +39,15 @@ def save_extraction(
     *,
     source_path: str | None,
     source_kind: str = "transcript",
+    auto_reconcile: bool = False,
+    reconcile_threshold: int = reconcile.DEFAULT_THRESHOLD,
 ) -> IngestSummary:
     """Persist a complete ExtractionResult as one session + N entities + their sources.
 
-    Idempotency note: v0.2 does not deduplicate against prior sessions. Every call
-    creates a new session. Deduplication / reconciliation across sessions is a
-    v1+ feature once we know what the right matching policy is.
+    When `auto_reconcile=True`, every newly inserted entity is checked against
+    existing canonical entities of the same kind and merged in if a strong-enough
+    match exists (>= reconcile_threshold). The reconciliation count is returned
+    on the IngestSummary.
     """
     with store.tx(conn):
         session_id = store.insert_session(
@@ -113,7 +117,24 @@ def save_extraction(
             _persist_sources(conn, entity_id, b.sources)
             counts["blocker"] += 1
 
-    return IngestSummary(session_id=session_id, counts=counts)
+    summary = IngestSummary(session_id=session_id, counts=counts)
+
+    if auto_reconcile:
+        # Walk all entities created in this session and try to merge them.
+        # We do this after the main transaction commits so the new entities
+        # are visible to the candidate query.
+        new_entity_ids = [
+            r["id"] for r in conn.execute(
+                "SELECT id FROM entities WHERE session_id = ? ORDER BY created_at ASC",
+                (session_id,),
+            ).fetchall()
+        ]
+        for eid in new_entity_ids:
+            outcome = reconcile.reconcile_one(conn, eid, threshold=reconcile_threshold)
+            if outcome is not None:
+                summary.reconcile_links += 1
+
+    return summary
 
 
 def list_commitments(
@@ -122,6 +143,7 @@ def list_commitments(
     actor: str | None = None,
     min_confidence: str | None = None,
     status: str | None = "open",
+    canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     return store.fetch_entities(
@@ -130,6 +152,7 @@ def list_commitments(
         primary_actor=actor,
         min_confidence=min_confidence,
         status=status,
+        canonical_only=canonical_only,
         limit=limit,
     )
 
@@ -139,6 +162,7 @@ def list_decisions(
     *,
     min_confidence: str | None = None,
     status: str | None = "open",
+    canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     return store.fetch_entities(
@@ -146,6 +170,7 @@ def list_decisions(
         kind="decision",
         min_confidence=min_confidence,
         status=status,
+        canonical_only=canonical_only,
         limit=limit,
     )
 
@@ -155,6 +180,7 @@ def list_open_questions(
     *,
     raised_by: str | None = None,
     min_confidence: str | None = None,
+    canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     return store.fetch_entities(
@@ -163,6 +189,7 @@ def list_open_questions(
         primary_actor=raised_by,
         min_confidence=min_confidence,
         status="open",
+        canonical_only=canonical_only,
         limit=limit,
     )
 
@@ -172,6 +199,7 @@ def list_blockers(
     *,
     owner: str | None = None,
     min_confidence: str | None = None,
+    canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     return store.fetch_entities(
@@ -180,8 +208,24 @@ def list_blockers(
         primary_actor=owner,
         min_confidence=min_confidence,
         status="open",
+        canonical_only=canonical_only,
         limit=limit,
     )
+
+
+def show_entity(conn: sqlite3.Connection, entity_id: str) -> dict[str, Any] | None:
+    """Get a single entity by id; folds in merged siblings if it's canonical."""
+    e = store.fetch_entity(conn, entity_id)
+    if e is None:
+        return None
+    if e.get("canonical_id") is None:
+        merged_ids = store._fetch_merged_member_ids(conn, e["id"])
+        e["merged_count"] = len(merged_ids)
+        for mid in merged_ids:
+            e["sources"].extend(store.fetch_sources(conn, mid))
+    else:
+        e["merged_count"] = 0
+    return e
 
 
 def recent_sessions(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:

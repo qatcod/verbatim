@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.3.0 — CLI extraction, SQLite state graph, MCP server, **live Slack workspace ingestion + Slack export + GitHub PR threads**, calibrated prompt, 85-test pytest suite, CI. Cross-session reconciliation + Linear projection on the v1 roadmap.
+**Status:** v0.4.0 — CLI extraction, SQLite state graph with **cross-session reconciliation**, MCP server, live Slack + Slack export + GitHub PR threads, **Linear projection**, calibrated prompt, 127-test pytest suite, CI.
 
 ---
 
@@ -135,6 +135,60 @@ verbatim query sessions
 verbatim resolve <entity-id-prefix>
 ```
 
+### Reconcile duplicates across sources
+
+When the same commitment shows up in a meeting *and* a Slack thread, they should be one entity with multiple source quotes, not two separate items.
+
+```bash
+# Preview which entities would be merged
+verbatim reconcile --dry-run
+
+# Apply at default threshold (88 — strict)
+verbatim reconcile
+
+# Tune the threshold if you have a noisy corpus
+verbatim reconcile --threshold 92
+```
+
+The matcher uses rapidfuzz token-set similarity scoped by kind + actor — same-actor, same-kind, topic-similarity ≥ threshold. False-positive merges silently rewrite state, so the default is deliberately strict; loosen only with `--dry-run` first.
+
+Manual corrections:
+
+```bash
+verbatim link <canonical-id> <member-id>   # merge member into canonical
+verbatim unlink <id>                       # restore to standalone canonical
+verbatim show <id>                         # see the canonical entity + all merged sources
+```
+
+Query commands fold merged siblings into canonicals by default — pass `--ungrouped` to see the raw list. Counts in `verbatim query stats` are canonical-only.
+
+Auto-reconcile during ingest (so live Slack messages reconcile against your meeting state in real time): pass `auto_reconcile=True` to `state.save_extraction` in code. CLI flag exposure for the various ingest commands is a follow-on.
+
+### Push commitments to Linear
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+
+# Preview the plan
+verbatim project linear --team Engineering --state Backlog --dry-run
+
+# Apply
+verbatim project linear --team Engineering --state Backlog
+
+# See what's been projected
+verbatim project status
+
+# Deactivate one projection; optionally archive the Linear issue too
+verbatim unproject <projection-id-prefix>
+verbatim unproject <projection-id-prefix> --close-external
+```
+
+What gets pushed: commitments at the configured confidence (default `high`) that have not already been projected. Idempotent — running twice does nothing the second time. The Linear issue's description carries the verbatim source quote(s) and the Verbatim entity id, so you can always trace a Linear ticket back to its origin in a meeting or Slack thread.
+
+Assignee resolution is best-effort: actor name → Linear user via displayName, then name, then email-local-part. No match → unassigned. The actor string is preserved in the description so it's never lost.
+
+Deadline → Linear `dueDate` only when the deadline parses as a real date (`2026-05-23`, `2026-05-23T10:00:00Z`). Natural-language deadlines like "EOD Friday" deliberately don't become due-dates — you'd be promising precision the extractor didn't actually have.
+
 ### Wire MCP into Claude Code
 
 Add to your Claude Code config (`~/.claude/settings.json` or workspace settings):
@@ -193,8 +247,9 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 | **v0.1.0** ✅ | CLI extraction. Confidence + source quoting. JSON + Markdown out. SQLite state graph. `ingest` / `query` / `resolve` CLI. MCP server. |
 | **v0.1.1** ✅ | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
 | **v0.2.0** ✅ | Slack workspace export connector. `ingest-slack` CLI with channel/date/length/limit/dry-run filters. |
-| **v0.3.0** ✅ (current) | Live Slack Web API connector (`ingest-slack-api`) + GitHub PR connector (`ingest-github`). Shared Slack primitives in `slack_common`. 20 new tests. |
-| **v1** | Cross-session reconciliation (same commitment from a meeting AND a Slack thread → one entity). Linear projection. Web UI. |
+| **v0.3.0** ✅ | Live Slack Web API connector (`ingest-slack-api`) + GitHub PR connector (`ingest-github`). Shared Slack primitives in `slack_common`. |
+| **v0.4.0** ✅ (current) | Cross-session reconciliation with `canonical_id`/`merged_at`, rapidfuzz matcher, `reconcile`/`link`/`unlink`/`show` commands, folded-by-default queries. Linear projection (`project linear`/`project status`/`unproject`) with idempotent issue creation, user resolution, and verbatim-quote-bearing descriptions. 42 new tests. |
+| **v1** | LLM-assisted reconciliation for borderline cases. Linear → Verbatim sync-back (issue status flows into entity state). Web UI. CLI flag for `--auto-reconcile` on ingest commands. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 

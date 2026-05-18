@@ -2,6 +2,41 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-05-19
+
+The two pieces that move Verbatim from "extractor" to "memory layer": entities now reconcile across sources, and the reconciled state pushes outward to Linear.
+
+### Added — Cross-session reconciliation
+- New `canonical_id` + `merged_at` columns on entities. A canonical entity has `canonical_id IS NULL`; merged siblings point at their canonical's id. Idempotent migration covers DBs created on earlier versions.
+- New `reconcile.py` module — rapidfuzz token-set similarity over `primary_topic`, scoped by `kind` + `primary_actor`. Default threshold 88 (deliberately conservative — false-positive merges silently rewrite state).
+- `verbatim reconcile` CLI command — sweep mode with `--threshold`, `--kind`, `--dry-run`.
+- `verbatim link <canonical> <member>` and `verbatim unlink <id>` for manual corrections. Linking through an existing chain resolves to the root canonical (no orphaned mid-chain pointers); linking a canonical with children re-roots the children too.
+- `verbatim show <id>` — detail view with folded sources from all merged siblings.
+- `auto_reconcile=True` option on `state.save_extraction` (and via `verbatim ingest`/etc. callers when wired) so new ingests can auto-merge against prior state.
+- All query commands now default to canonical-only view (merged siblings folded into their canonical with `merged_count` and combined `sources`). `--ungrouped` shows the raw flat list.
+
+### Added — Linear projection
+- New `projections/` subpackage. First inhabitant: `projections/linear.py`.
+- `LinearClient` — minimal GraphQL client over httpx. `viewer`, `list_teams`, `list_users`, `list_workflow_states`, `create_issue`, `archive_issue`.
+- `build_user_resolver` — best-effort actor → Linear user-id by displayName/name/email-local.
+- `render_issue_from_commitment` — pure function that builds an `IssueDraft` (title, description, assignee_id, due_date) from a Verbatim commitment entity. Embeds source quotes + Verbatim entity id in the issue description for traceability. Deadline only sets `dueDate` if it parses as a real date — natural-language deadlines like "EOD Friday" deliberately *don't* become Linear due-dates.
+- `plan_projection` / `execute_projection` — idempotent split: planning is pure (decides skip vs project), execution does the API call + persists.
+- New `projections` table — tracks `(entity_id, target_kind)` with unique constraint on `(entity_id, target_kind, status='active')`, so re-running `verbatim project linear` doesn't duplicate.
+- `verbatim project linear --team <name|key> --state <name> [--api-key X] [--min-confidence high] [--dry-run]` — push pending commitments. `verbatim project status` lists active projections. `verbatim unproject <id> [--close-external]` deactivates our tracking; with `--close-external` also archives the Linear issue.
+
+### Tests
+- 22 reconciliation tests (similarity scoring, candidate search, link/unlink semantics including chain resolution and child re-rooting, folded vs ungrouped views, auto-reconcile on ingest, stats).
+- 20 Linear tests (mocked GraphQL via httpx.MockTransport, user-resolver fallback ladder, issue rendering, projection planning idempotency, archive-on-unproject).
+- Total suite: 127 tests, all green. No network in any test.
+
+### Dependencies
+- `rapidfuzz >= 3.5.0` (deterministic topic similarity)
+
+### Design notes — what's deliberately *not* in here
+- LLM-assisted reconciliation: this version is rapidfuzz-only because false-positive merges are hard to recover from in a memory-layer product. Adding an LLM-judge pass is a follow-on once we have real corpus signal on what the threshold misses.
+- Projection of non-commitment kinds to Linear. The schema and CLI are kind-agnostic but the rendering today only knows commitments. Decisions/questions/blockers can be added without schema changes.
+- Linear → Verbatim sync-back (issue status changes flowing into entity resolution). One-way push only for v0.4.
+
 ## [0.3.0] — 2026-05-18
 
 ### Added

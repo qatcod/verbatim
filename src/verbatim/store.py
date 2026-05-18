@@ -45,14 +45,18 @@ CREATE TABLE IF NOT EXISTS entities (
     primary_topic TEXT,
     deadline TEXT,
     payload_json TEXT NOT NULL,
+    canonical_id TEXT,
+    merged_at TEXT,
     created_at TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (canonical_id) REFERENCES entities(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities(kind);
 CREATE INDEX IF NOT EXISTS idx_entities_actor ON entities(primary_actor);
 CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
 CREATE INDEX IF NOT EXISTS idx_entities_session ON entities(session_id);
+CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id);
 
 CREATE TABLE IF NOT EXISTS entity_sources (
     id TEXT PRIMARY KEY,
@@ -66,7 +70,42 @@ CREATE TABLE IF NOT EXISTS entity_sources (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sources_entity ON entity_sources(entity_id);
+
+CREATE TABLE IF NOT EXISTS projections (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    external_id TEXT,
+    external_url TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    last_synced_at TEXT NOT NULL,
+    FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_projections_entity ON projections(entity_id);
+CREATE INDEX IF NOT EXISTS idx_projections_target ON projections(target_kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_unique
+    ON projections(entity_id, target_kind, status);
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent additive migrations for DBs created by earlier versions.
+
+    Pre-0.4.0 DBs have entities without canonical_id / merged_at columns;
+    add them in-place. CREATE TABLE IF NOT EXISTS covers fresh DBs.
+    """
+    existing_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(entities)").fetchall()
+    }
+    if "canonical_id" not in existing_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN canonical_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id)")
+    if "merged_at" not in existing_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN merged_at TEXT")
 
 
 def resolve_db_path(path: str | Path | None = None) -> Path:
@@ -80,13 +119,14 @@ def resolve_db_path(path: str | Path | None = None) -> Path:
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
-    """Open a connection, ensure schema is initialized."""
+    """Open a connection, ensure schema is initialized + migrated."""
     db_path = resolve_db_path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -237,8 +277,18 @@ def fetch_entities(
     status: str | None = "open",
     min_confidence: str | None = None,
     session_id: str | None = None,
+    canonical_only: bool = True,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
+    """Fetch entities matching the given filters.
+
+    By default returns canonical entities only (rows where `canonical_id IS NULL`),
+    which is the right view for "show me what's live". For each canonical entity
+    returned, `sources` includes quotes from any merged siblings, and
+    `merged_count` reports how many siblings are linked.
+
+    Pass `canonical_only=False` to see every entity individually (no group folding).
+    """
     conditions: list[str] = []
     params: list[Any] = []
     if kind:
@@ -253,6 +303,8 @@ def fetch_entities(
     if session_id:
         conditions.append("session_id = ?")
         params.append(session_id)
+    if canonical_only:
+        conditions.append("canonical_id IS NULL")
     if min_confidence:
         order = {"low": 0, "medium": 1, "high": 2}
         threshold = order.get(min_confidence.lower(), 0)
@@ -265,7 +317,7 @@ def fetch_entities(
     query = f"""
         SELECT id, session_id, kind, confidence, status,
                primary_actor, primary_topic, deadline,
-               payload_json, created_at
+               payload_json, canonical_id, merged_at, created_at
         FROM entities
         {where}
         ORDER BY created_at DESC
@@ -278,9 +330,66 @@ def fetch_entities(
     for r in rows:
         d = dict(r)
         d["payload"] = json.loads(d.pop("payload_json"))
-        d["sources"] = fetch_sources(conn, d["id"])
+        if canonical_only:
+            # Fold sources from any merged siblings into this canonical's sources.
+            merged_ids = _fetch_merged_member_ids(conn, d["id"])
+            d["merged_count"] = len(merged_ids)
+            d["sources"] = fetch_sources(conn, d["id"])
+            for mid in merged_ids:
+                d["sources"].extend(fetch_sources(conn, mid))
+        else:
+            d["merged_count"] = 0
+            d["sources"] = fetch_sources(conn, d["id"])
         out.append(d)
     return out
+
+
+def _fetch_merged_member_ids(conn: sqlite3.Connection, canonical_id: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT id FROM entities WHERE canonical_id = ? ORDER BY created_at ASC",
+        (canonical_id,),
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def fetch_entity(conn: sqlite3.Connection, entity_id: str) -> dict[str, Any] | None:
+    """Fetch a single entity by id, no folding."""
+    row = conn.execute(
+        """
+        SELECT id, session_id, kind, confidence, status,
+               primary_actor, primary_topic, deadline,
+               payload_json, canonical_id, merged_at, created_at
+        FROM entities
+        WHERE id = ?
+        """,
+        (entity_id,),
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["payload"] = json.loads(d.pop("payload_json"))
+    d["sources"] = fetch_sources(conn, d["id"])
+    return d
+
+
+def set_canonical(
+    conn: sqlite3.Connection,
+    entity_id: str,
+    canonical_id: str,
+) -> None:
+    """Mark `entity_id` as a member of `canonical_id`'s group (non-canonical)."""
+    conn.execute(
+        "UPDATE entities SET canonical_id = ?, merged_at = ? WHERE id = ?",
+        (canonical_id, utc_now_iso(), entity_id),
+    )
+
+
+def clear_canonical(conn: sqlite3.Connection, entity_id: str) -> None:
+    """Restore `entity_id` to standalone-canonical status."""
+    conn.execute(
+        "UPDATE entities SET canonical_id = NULL, merged_at = NULL WHERE id = ?",
+        (entity_id,),
+    )
 
 
 def fetch_recent_sessions(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
@@ -311,12 +420,125 @@ def update_entity_status(conn: sqlite3.Connection, entity_id: str, status: str) 
 
 
 def db_stats(conn: sqlite3.Connection) -> dict[str, int]:
-    """Quick counts for status display."""
+    """Quick counts for status display. Counts canonical entities only."""
     out = {}
     out["sessions"] = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     for kind in ("commitment", "decision", "open_question", "blocker"):
         out[f"{kind}s_open"] = conn.execute(
-            "SELECT COUNT(*) FROM entities WHERE kind = ? AND status = 'open'",
+            "SELECT COUNT(*) FROM entities "
+            "WHERE kind = ? AND status = 'open' AND canonical_id IS NULL",
             (kind,),
         ).fetchone()[0]
+    out["entities_merged"] = conn.execute(
+        "SELECT COUNT(*) FROM entities WHERE canonical_id IS NOT NULL"
+    ).fetchone()[0]
+    out["projections_active"] = conn.execute(
+        "SELECT COUNT(*) FROM projections WHERE status = 'active'"
+    ).fetchone()[0]
     return out
+
+
+# ----------------------- projection CRUD -----------------------
+
+
+def insert_projection(
+    conn: sqlite3.Connection,
+    *,
+    entity_id: str,
+    target_kind: str,
+    external_id: str | None,
+    external_url: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    projection_id = new_id()
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO projections (
+            id, entity_id, target_kind, external_id, external_url,
+            status, metadata_json, created_at, last_synced_at
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        """,
+        (
+            projection_id,
+            entity_id,
+            target_kind,
+            external_id,
+            external_url,
+            json.dumps(metadata or {}, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
+    return projection_id
+
+
+def find_active_projection(
+    conn: sqlite3.Connection,
+    *,
+    entity_id: str,
+    target_kind: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT id, entity_id, target_kind, external_id, external_url,
+               status, metadata_json, created_at, last_synced_at
+        FROM projections
+        WHERE entity_id = ? AND target_kind = ? AND status = 'active'
+        """,
+        (entity_id, target_kind),
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["metadata"] = json.loads(d.pop("metadata_json"))
+    return d
+
+
+def list_projections(
+    conn: sqlite3.Connection,
+    *,
+    target_kind: str | None = None,
+    status: str | None = "active",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    if target_kind:
+        conditions.append("p.target_kind = ?")
+        params.append(target_kind)
+    if status is not None:
+        conditions.append("p.status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = conn.execute(
+        f"""
+        SELECT p.id, p.entity_id, p.target_kind, p.external_id, p.external_url,
+               p.status, p.metadata_json, p.created_at, p.last_synced_at,
+               e.kind AS entity_kind, e.primary_actor, e.primary_topic, e.confidence
+        FROM projections p
+        LEFT JOIN entities e ON e.id = p.entity_id
+        {where}
+        ORDER BY p.created_at DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["metadata"] = json.loads(d.pop("metadata_json"))
+        out.append(d)
+    return out
+
+
+def update_projection_status(
+    conn: sqlite3.Connection,
+    projection_id: str,
+    status: str,
+) -> bool:
+    cur = conn.execute(
+        "UPDATE projections SET status = ?, last_synced_at = ? WHERE id = ?",
+        (status, utc_now_iso(), projection_id),
+    )
+    return cur.rowcount > 0
