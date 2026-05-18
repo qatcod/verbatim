@@ -379,7 +379,8 @@ def _print_entity_table(items: list[dict[str, Any]], *, kind: str) -> None:
     for item in items:
         payload = item["payload"]
         srcs = item["sources"]
-        quote = (srcs[0]["verbatim_quote"][:60] + "…") if srcs and len(srcs[0]["verbatim_quote"]) > 60 else (srcs[0]["verbatim_quote"] if srcs else "")
+        first_quote = srcs[0]["verbatim_quote"] if srcs else ""
+        quote = (first_quote[:60] + "…") if len(first_quote) > 60 else first_quote
         conf_color = {"high": "green", "medium": "yellow", "low": "red"}.get(item["confidence"], "white")
         conf_cell = f"[{conf_color}]{item['confidence']}[/{conf_color}]"
         row = [item["id"][:8] + "…", conf_cell]

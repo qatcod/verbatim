@@ -55,7 +55,7 @@ def to_markdown(
     """Render the extraction as a human-readable Markdown report."""
     lines: list[str] = []
 
-    title = f"# Meeting summary"
+    title = "# Meeting summary"
     if source_path:
         title += f" — `{source_path}`"
     lines.append(title)

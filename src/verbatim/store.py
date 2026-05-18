@@ -13,10 +13,11 @@ import json
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 DEFAULT_DB_PATH = Path.home() / ".verbatim" / "state.db"
 

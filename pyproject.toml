@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "verbatim"
-version = "0.1.0"
+version = "0.1.1"
 description = "The AI memory layer for engineering teams. Extracts structured commitments, decisions, open questions, and blockers from meeting transcripts — every extraction sourced to a verbatim quote."
 readme = "README.md"
 license = { text = "MIT" }
@@ -47,9 +47,21 @@ Issues = "https://github.com/qatcod/verbatim/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/verbatim"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:asyncio"
+
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+# B008: typer.Option/typer.Argument as defaults is the framework's documented API
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Long instructional strings — the system prompt and Pydantic Field descriptions
+# read better as single lines than wrapped, even when over 120 chars.
+"src/verbatim/prompts.py" = ["E501"]
+"src/verbatim/schema.py" = ["E501"]
