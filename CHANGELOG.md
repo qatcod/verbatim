@@ -2,6 +2,14 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-05-19
+
+### Added
+- `--auto-reconcile` and `--reconcile-threshold` flags on all four ingest commands (`ingest`, `ingest-slack`, `ingest-slack-api`, `ingest-github`). When enabled, every newly extracted entity is checked against existing canonicals of the same kind and merged in if similarity ≥ threshold. Ingest summaries now report the per-run reconciliation count when the flag is on.
+
+### Why
+v0.4.0 added reconciliation as a separate post-hoc step. With continuous ingest paths (live Slack + GitHub), running `reconcile` periodically is fine, but having merging happen at the point of new ingestion keeps the queryable state coherent in real time and avoids a "between-runs" window where duplicates exist.
+
 ## [0.4.0] — 2026-05-19
 
 The two pieces that move Verbatim from "extractor" to "memory layer": entities now reconcile across sources, and the reconciled state pushes outward to Linear.

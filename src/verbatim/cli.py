@@ -116,6 +116,15 @@ def ingest_cmd(
         None, "--db",
         help="SQLite DB path. Defaults to $VERBATIM_DB_PATH or ~/.verbatim/state.db.",
     ),
+    auto_reconcile: bool = typer.Option(
+        False, "--auto-reconcile",
+        help="Auto-merge new entities into existing canonicals when similarity ≥ threshold.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
+        min=50, max=100,
+        help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
     """Extract and persist into the local state store."""
@@ -132,12 +141,15 @@ def ingest_cmd(
         summary = state.save_extraction(
             conn, result, diag,
             source_path=source if source != "-" else None,
+            auto_reconcile=auto_reconcile,
+            reconcile_threshold=reconcile_threshold,
         )
     finally:
         conn.close()
 
     if not quiet:
         total = sum(summary.counts.values())
+        recon = f"  ·  reconciled: {summary.reconcile_links}" if auto_reconcile else ""
         body = (
             f"[bold]Saved {total} items[/bold] · "
             f"{summary.counts['commitment']} commitments · "
@@ -145,7 +157,7 @@ def ingest_cmd(
             f"{summary.counts['open_question']} open questions · "
             f"{summary.counts['blocker']} blockers\n"
             f"[dim]session_id: {summary.session_id}  ·  "
-            f"db: {store.resolve_db_path(db)}[/dim]"
+            f"db: {store.resolve_db_path(db)}{recon}[/dim]"
         )
         err_console.print(Panel(body, title="ingested", border_style="green", expand=False))
 
@@ -197,6 +209,15 @@ def ingest_slack_cmd(
         "--dry-run",
         help="List the units that would be extracted without making API calls.",
     ),
+    auto_reconcile: bool = typer.Option(
+        False, "--auto-reconcile",
+        help="Auto-merge new entities into existing canonicals during ingest.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
+        min=50, max=100,
+        help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
+    ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
@@ -237,7 +258,10 @@ def ingest_slack_cmd(
         _print_slack_dry_run(units)
         return
 
-    _run_slack_ingest(units, model=model, db=db)
+    _run_slack_ingest(
+        units, model=model, db=db,
+        auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+    )
 
 
 def _print_slack_dry_run(units: list) -> None:
@@ -262,12 +286,20 @@ def _print_slack_dry_run(units: list) -> None:
     )
 
 
-def _run_slack_ingest(units: list, *, model: str | None, db: Path | None) -> None:
+def _run_slack_ingest(
+    units: list,
+    *,
+    model: str | None,
+    db: Path | None,
+    auto_reconcile: bool = False,
+    reconcile_threshold: int = reconcile_lib.DEFAULT_THRESHOLD,
+) -> None:
     conn = state.open_db(db)
     total_counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
     failed = 0
     total_in_tokens = 0
     total_out_tokens = 0
+    total_reconciled = 0
 
     progress = Progress(
         SpinnerColumn(),
@@ -295,11 +327,14 @@ def _run_slack_ingest(units: list, *, model: str | None, db: Path | None) -> Non
                         conn, result, diag,
                         source_path=unit.source_label,
                         source_kind=unit.source_kind,
+                        auto_reconcile=auto_reconcile,
+                        reconcile_threshold=reconcile_threshold,
                     )
                     for k, v in summary.counts.items():
                         total_counts[k] += v
                     total_in_tokens += diag.input_tokens
                     total_out_tokens += diag.output_tokens
+                    total_reconciled += summary.reconcile_links
                 except Exception as e:  # noqa: BLE001
                     failed += 1
                     err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
@@ -308,6 +343,7 @@ def _run_slack_ingest(units: list, *, model: str | None, db: Path | None) -> Non
         conn.close()
 
     total = sum(total_counts.values())
+    recon = f"  ·  reconciled: {total_reconciled}" if auto_reconcile else ""
     body = (
         f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
         f"{total_counts['commitment']} commitments · "
@@ -315,7 +351,7 @@ def _run_slack_ingest(units: list, *, model: str | None, db: Path | None) -> Non
         f"{total_counts['open_question']} open questions · "
         f"{total_counts['blocker']} blockers\n"
         f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
-        f"failed: {failed}[/dim]"
+        f"failed: {failed}{recon}[/dim]"
     )
     err_console.print(Panel(body, title="slack ingest complete", border_style="green", expand=False))
 
@@ -369,6 +405,15 @@ def ingest_slack_api_cmd(
     request_pause: float = typer.Option(
         0.0, "--request-pause",
         help="Pause N seconds between Slack API calls to avoid rate limits.",
+    ),
+    auto_reconcile: bool = typer.Option(
+        False, "--auto-reconcile",
+        help="Auto-merge new entities into existing canonicals during ingest.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
+        min=50, max=100,
+        help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
     ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
@@ -439,7 +484,10 @@ def ingest_slack_api_cmd(
         _print_slack_dry_run(units)
         return
 
-    _run_slack_ingest(units, model=model, db=db)
+    _run_slack_ingest(
+        units, model=model, db=db,
+        auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+    )
 
 
 # ----------------------- ingest-github (GitHub PR discussions) -----------------------
@@ -474,6 +522,15 @@ def ingest_github_cmd(
     ),
     limit: int | None = typer.Option(None, "--limit", "-n"),
     dry_run: bool = typer.Option(False, "--dry-run"),
+    auto_reconcile: bool = typer.Option(
+        False, "--auto-reconcile",
+        help="Auto-merge new entities into existing canonicals during ingest.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
+        min=50, max=100,
+        help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
+    ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
@@ -522,7 +579,10 @@ def ingest_github_cmd(
         _print_github_dry_run(units)
         return
 
-    _run_unit_ingest(units, model=model, db=db, source_kind_default="github_pr")
+    _run_unit_ingest(
+        units, model=model, db=db, source_kind_default="github_pr",
+        auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+    )
 
 
 def _print_github_dry_run(units: list) -> None:
@@ -547,13 +607,22 @@ def _print_github_dry_run(units: list) -> None:
     )
 
 
-def _run_unit_ingest(units: list, *, model: str | None, db: Path | None, source_kind_default: str) -> None:
+def _run_unit_ingest(
+    units: list,
+    *,
+    model: str | None,
+    db: Path | None,
+    source_kind_default: str,
+    auto_reconcile: bool = False,
+    reconcile_threshold: int = reconcile_lib.DEFAULT_THRESHOLD,
+) -> None:
     """Generic ingest loop usable for any unit type with .transcript / .source_label / .source_kind."""
     conn = state.open_db(db)
     total_counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
     failed = 0
     total_in_tokens = 0
     total_out_tokens = 0
+    total_reconciled = 0
 
     progress = Progress(
         SpinnerColumn(),
@@ -575,11 +644,14 @@ def _run_unit_ingest(units: list, *, model: str | None, db: Path | None, source_
                         conn, result, diag,
                         source_path=unit.source_label,
                         source_kind=getattr(unit, "source_kind", source_kind_default),
+                        auto_reconcile=auto_reconcile,
+                        reconcile_threshold=reconcile_threshold,
                     )
                     for k, v in summary.counts.items():
                         total_counts[k] += v
                     total_in_tokens += diag.input_tokens
                     total_out_tokens += diag.output_tokens
+                    total_reconciled += summary.reconcile_links
                 except Exception as e:  # noqa: BLE001
                     failed += 1
                     err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
@@ -588,6 +660,7 @@ def _run_unit_ingest(units: list, *, model: str | None, db: Path | None, source_
         conn.close()
 
     total = sum(total_counts.values())
+    recon = f"  ·  reconciled: {total_reconciled}" if auto_reconcile else ""
     body = (
         f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
         f"{total_counts['commitment']} commitments · "
@@ -595,7 +668,7 @@ def _run_unit_ingest(units: list, *, model: str | None, db: Path | None, source_
         f"{total_counts['open_question']} open questions · "
         f"{total_counts['blocker']} blockers\n"
         f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
-        f"failed: {failed}[/dim]"
+        f"failed: {failed}{recon}[/dim]"
     )
     err_console.print(Panel(body, title="ingest complete", border_style="green", expand=False))
 
