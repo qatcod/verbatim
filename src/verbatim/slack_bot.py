@@ -126,11 +126,11 @@ def format_commitments(items: list[dict[str, Any]]) -> str:
         deadline = f" *by* {p['deadline']}" if p.get("deadline") else ""
         to = f" → {p['to']}" if p.get("to") else ""
         conf = _conf_emoji(it["confidence"])
-        merged = f" _(merged from {it.get('merged_count', 0)+1} sources)_" if it.get("merged_count") else ""
+        merged = _merged_pill_text(it.get("merged_count", 0))
         lines.append(
             f"{conf} *{p.get('actor') or '?'}*{to} — {p.get('deliverable') or '?'}{deadline}{merged}"
         )
-        lines.append(f"      _id: `{it['id'][:10]}…`_")
+        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -141,11 +141,11 @@ def format_decisions(items: list[dict[str, Any]]) -> str:
     for it in items:
         p = it["payload"]
         conf = _conf_emoji(it["confidence"])
-        merged = f" _(merged from {it.get('merged_count', 0)+1} sources)_" if it.get("merged_count") else ""
+        merged = _merged_pill_text(it.get("merged_count", 0))
         lines.append(f"{conf} *{p.get('topic') or '?'}* → {p.get('outcome') or '?'}{merged}")
         if p.get("rationale"):
             lines.append(f"      _{p['rationale']}_")
-        lines.append(f"      _id: `{it['id'][:10]}…`_")
+        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -161,7 +161,7 @@ def format_questions(items: list[dict[str, Any]]) -> str:
             f"{conf} *{p.get('topic') or '?'}* — {p.get('question') or '?'}"
             f"{addressed}  _(raised by {p.get('raised_by') or '?'})_"
         )
-        lines.append(f"      _id: `{it['id'][:10]}…`_")
+        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -176,7 +176,7 @@ def format_blockers(items: list[dict[str, Any]]) -> str:
         lines.append(
             f"{conf} *{p.get('blocked_thing') or '?'}* blocked by *{p.get('blocked_by') or '?'}*{owner}"
         )
-        lines.append(f"      _id: `{it['id'][:10]}…`_")
+        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -214,7 +214,9 @@ def format_entity_detail(entity: dict[str, Any]) -> str:
         lines.append(f"*{p.get('blocked_thing') or '?'}* blocked by *{p.get('blocked_by') or '?'}*")
 
     if entity.get("merged_count"):
-        lines.append(f"_(merged from {entity['merged_count']+1} sources)_")
+        n = entity["merged_count"]
+        word = "source" if n == 1 else "sources"
+        lines.append(f"_(merged with {n} other {word})_")
     lines.append("")
     lines.append("*Supporting quotes:*")
     for s in entity.get("sources", []):
@@ -228,6 +230,17 @@ def _conf_emoji(confidence: str) -> str:
     return {"high": ":large_green_circle:", "medium": ":large_yellow_circle:", "low": ":red_circle:"}.get(
         confidence, ":white_circle:"
     )
+
+
+def _merged_pill_text(merged_count: int) -> str:
+    """Compact "+N merged" suffix shared by all Slack list views.
+
+    Mirrors the web UI's `+N merged` pill so the same item reads the same
+    way in both surfaces.
+    """
+    if not merged_count:
+        return ""
+    return f" _(+{merged_count} merged)_"
 
 
 # ----------------------- dispatch -----------------------

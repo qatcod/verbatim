@@ -2,6 +2,33 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] — 2026-05-19
+
+A polish pass — no single inconsistency across surfaces.
+
+### Fixed — cross-surface consistency
+- **Entity IDs are now truncated to 8 chars + `…` everywhere.** Slack bot list views were using `[:10]`; brought into line with the web UI and CLI which already used `[:8]`.
+- **"merged with N other source(s)" copy is now identical** across web entity detail, Slack `show`, and CLI `show`. Previously: web said "merged from N+1 sources", Slack said the same, CLI said "merged siblings: N". All three now read the same.
+- **Pluralization is correct.** `1 other source` (singular) / `2 other sources` (plural). Tested explicitly.
+- **Slack list view** now uses the compact `+N merged` pill form mirroring the web UI's pill, instead of the long parenthetical.
+
+### Added — activity feed on dashboard
+The plain "Recent sessions" table on the home page is replaced with a proper chronological activity feed (timestamp + event description + dot indicator). Future event kinds (reconciliation, projection-created) can plug into the same component without re-rendering.
+
+### Added — accessibility
+- **Skip-to-content link** at top of body, hidden until focused. Keyboard users can jump straight to `<main>` without tabbing through the entire sidebar.
+- **`aria-current="page"`** on the active sidebar nav link.
+- **`aria-label="Search Verbatim state"`** on the sidebar search input.
+- **`aria-label="Primary"`** on the sidebar nav element.
+- **Visible focus rings** via `:focus-visible` on every interactive element (links, buttons, inputs, selects). Uses the violet accent so the focus indicator matches the brand.
+- **Decorative SVG icons** have `aria-hidden="true"` so screen readers skip them.
+
+### Refined — wordmark
+Slight typography tightening on the brand wordmark in the sidebar: tighter letter-spacing (-0.018em), font-weight 600, Inter's `ss01` + `cv11` stylistic alternates enabled for cleaner letterforms. The brand mark is unchanged (the v0.7.0 quote-pair design is the canonical mark until a new logo arrives).
+
+### Tests
+- 228 total (+15 new). All consistency contracts pinned by `tests/test_consistency.py`: ID truncation length, merged-source language match across web/Slack, pluralization, activity feed presence + empty-state, every a11y attribute.
+
 ## [0.7.0] — 2026-05-19
 
 ### Added — Cross-entity search

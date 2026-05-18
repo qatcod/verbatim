@@ -206,13 +206,36 @@ aside.sidebar {
   padding: 4px 8px 20px; color: var(--accent);
 }
 .brand .name {
-  font-weight: 700; font-size: 16px; letter-spacing: -0.01em;
+  font-weight: 600; font-size: 17px;
+  letter-spacing: -0.018em;
   color: var(--fg);
+  font-feature-settings: "ss01", "cv11";
 }
 .brand .badge-version {
   margin-left: auto; font-size: 10px; color: var(--muted);
   border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px;
   font-family: ui-monospace, Menlo, monospace;
+}
+
+/* ── a11y ───────────────────────────────────────────────────────────── */
+.skip-link {
+  position: absolute; top: -40px; left: 8px;
+  background: var(--accent); color: #fff;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 13px;
+  z-index: 100;
+  transition: top 0.18s ease;
+}
+.skip-link:focus { top: 8px; text-decoration: none; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 nav.side { display: flex; flex-direction: column; gap: 1px; }
 nav.side .group-label {
@@ -615,20 +638,22 @@ _SEARCH_SHORTCUT_JS = """
 def _shell(title: str, body: str, active: str = "", search_q: str = "") -> str:
     nav_items = []
     for path, label, icon in _NAV_LINKS:
-        is_active = "active" if path == active else ""
+        is_active = path == active
+        cls = "active" if is_active else ""
+        aria = ' aria-current="page"' if is_active else ""
         icon_svg = _ICONS.get(icon, "")
         nav_items.append(
-            f'<a href="{html.escape(path)}" class="{is_active}">'
+            f'<a href="{html.escape(path)}" class="{cls}"{aria}>'
             f"{icon_svg}<span>{html.escape(label)}</span></a>"
         )
 
     search_input = (
-        '<form class="sidebar-search" method="get" action="/search">'
-        f'<span class="search-icon">{_ICONS["search"]}</span>'
+        '<form class="sidebar-search" method="get" action="/search" role="search">'
+        f'<span class="search-icon" aria-hidden="true">{_ICONS["search"]}</span>'
         f'<input type="text" name="q" id="sidebar-search-input" '
         f'placeholder="Search…" value="{html.escape(search_q)}" '
-        'autocomplete="off">'
-        '<span class="kbd">/</span>'
+        'autocomplete="off" aria-label="Search Verbatim state">'
+        '<span class="kbd" aria-hidden="true">/</span>'
         '</form>'
     )
 
@@ -641,6 +666,7 @@ def _shell(title: str, body: str, active: str = "", search_q: str = "") -> str:
 <style>{_CSS}</style>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to content</a>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
@@ -649,14 +675,14 @@ def _shell(title: str, body: str, active: str = "", search_q: str = "") -> str:
       <span class="badge-version">v0.7</span>
     </div>
     {search_input}
-    <nav class="side">
+    <nav class="side" aria-label="Primary">
       <div class="group-label">State</div>
       {"".join(nav_items[:5])}
       <div class="group-label">Activity</div>
       {"".join(nav_items[5:])}
     </nav>
   </aside>
-  <main>{body}</main>
+  <main id="main-content">{body}</main>
 </div>
 {_SEARCH_SHORTCUT_JS}
 </body>
@@ -759,15 +785,10 @@ async def home(request: Request) -> HTMLResponse:
 
     sessions_block = ""
     if recent_sessions:
-        session_rows = "".join(_render_session_row(s) for s in recent_sessions)
-        sessions_block = f"""
-<h2 class="section">Recent sessions</h2>
-<div class="card">
-  <table>
-    <thead><tr><th>When (UTC)</th><th>Source</th><th>Kind</th><th>Items</th></tr></thead>
-    <tbody>{session_rows}</tbody>
-  </table>
-</div>"""
+        sessions_block = (
+            '<h2 class="section">Activity</h2>'
+            + _render_activity_feed(recent_sessions)
+        )
 
     body = (
         _page_header("Verbatim dashboard", subtitle="overview of your team's operational state")
@@ -805,6 +826,43 @@ def _render_session_row(s: dict[str, Any]) -> str:
         f"<td>{s.get('entity_count', 0)}</td>"
         "</tr>"
     )
+
+
+def _render_activity_feed(sessions: list[dict[str, Any]]) -> str:
+    """Chronological event feed for the dashboard.
+
+    Today each item is one ingestion session. Future event types (reconciliation,
+    projection creation, manual link/unlink) can plug into the same component
+    by yielding the same shape: dot + body{when, text}.
+    """
+    if not sessions:
+        return _empty(
+            "No activity yet",
+            "Each ingest will show up here as an event.",
+            "verbatim ingest path/to/meeting.txt",
+        )
+
+    items: list[str] = []
+    for s in sessions:
+        source = s.get("source_path") or "<stdin>"
+        kind = s.get("source_kind") or "transcript"
+        count = s.get("entity_count", 0)
+        when = s["extracted_at"][:19].replace("T", " ")
+        text = (
+            f'Ingested <strong>{count}</strong> items from '
+            f'<span class="mono">{html.escape(source)}</span> '
+            f'<span class="muted">({html.escape(kind)})</span>'
+        )
+        items.append(
+            '<div class="activity-item">'
+            '<span class="activity-dot"></span>'
+            '<div class="activity-body">'
+            f'<div class="activity-text">{text}</div>'
+            f'<div class="activity-when">{html.escape(when)} UTC</div>'
+            "</div>"
+            "</div>"
+        )
+    return f'<div class="activity-feed">{"".join(items)}</div>'
 
 
 async def commitments(request: Request) -> HTMLResponse:
@@ -1162,8 +1220,10 @@ async def entity_detail(request: Request) -> HTMLResponse:
         f'<span class="pill">status: {html.escape(entity["status"])}</span>',
     ]
     if entity.get("merged_count"):
+        n = entity["merged_count"]
+        word = "source" if n == 1 else "sources"
         meta_parts.append(
-            f'<span class="pill">merged from {entity["merged_count"]+1} sources</span>'
+            f'<span class="pill">merged with {n} other {word}</span>'
         )
     if entity.get("canonical_id"):
         meta_parts.append(

@@ -1512,7 +1512,9 @@ def _print_entity_detail(entity: dict[str, Any]) -> None:
     if entity.get("canonical_id"):
         lines.append(f"[dim]merged into canonical: {entity['canonical_id']}[/dim]")
     if entity.get("merged_count", 0) > 0:
-        lines.append(f"[dim]merged siblings: {entity['merged_count']}[/dim]")
+        n = entity["merged_count"]
+        word = "source" if n == 1 else "sources"
+        lines.append(f"[dim]merged with {n} other {word}[/dim]")
     payload = entity["payload"]
     if entity["kind"] == "commitment":
         lines.append(f"actor: {payload.get('actor') or '—'}")
