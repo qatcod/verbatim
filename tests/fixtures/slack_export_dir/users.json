@@ -1,0 +1,25 @@
+[
+  {
+    "id": "U001",
+    "name": "qat",
+    "profile": {
+      "display_name_normalized": "qat",
+      "real_name_normalized": "Qat Hassan"
+    }
+  },
+  {
+    "id": "U002",
+    "name": "jason",
+    "profile": {
+      "display_name_normalized": "jason",
+      "real_name_normalized": "Jason Remillard"
+    }
+  },
+  {
+    "id": "U003",
+    "name": "taz",
+    "profile": {
+      "real_name_normalized": "Taz Jack"
+    }
+  }
+]

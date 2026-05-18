@@ -2,6 +2,25 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-05-18
+
+### Added
+- **Slack export connector** — ingest a Slack workspace export ZIP (or extracted directory) directly. No OAuth, no Slack API setup; the export is a file the customer can already produce. First multi-source ingestion path beyond meeting transcripts.
+- `verbatim ingest-slack <path>` CLI command with filtering flags:
+  - `--channel` (repeatable) to restrict to specific channels
+  - `--since` / `--until` for date windowing
+  - `--min-thread-messages` (default 3) to skip noise threads
+  - `--include-loose` for channel-day rollups of non-threaded messages
+  - `--limit` and `--dry-run` for cost control + plan preview
+- Threads become their own extraction sessions tagged `source_kind = "slack_thread"`, with `source_label` of the form `slack://#channel/thread/<timestamp>` for traceability
+- User-ID mention resolution (`<@U12345>` → `@display-name`) using the export's `users.json`
+- 23 Slack connector tests against a fixture export
+
+### Design notes
+- Thread-level granularity is the v1.0 default — a thread is the closest Slack analog to a meeting and yields cleaner state than dumping a channel of unrelated messages into one extraction.
+- Noise subtypes (channel_join, pinned_item, bot_add, etc.) are filtered at parse time.
+- Connector lives at `src/verbatim/connectors/slack_export.py` — first inhabitant of the connector framework that will hold GitHub, Anthropic Console, CloudTrail, etc. in future releases.
+
 ## [0.1.1] — 2026-05-18
 
 ### Added

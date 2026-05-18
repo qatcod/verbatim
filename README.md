@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.1.1 — CLI extraction, SQLite-backed state graph, MCP server, calibrated extraction prompt, 42-test pytest suite, CI. Connectors for Slack / GitHub / Linear projection on the v1 roadmap.
+**Status:** v0.2.0 — CLI extraction, SQLite state graph, MCP server, **Slack workspace export ingestion**, calibrated prompt, 65-test pytest suite, CI. GitHub PR / Linear projection on the v1 roadmap.
 
 ---
 
@@ -54,6 +54,34 @@ verbatim ingest path/to/meeting.txt
 ```
 
 Set `VERBATIM_DB_PATH` to override the database location.
+
+### Ingest a Slack workspace export
+
+```bash
+# Dry-run first to see what would be extracted and estimate cost
+verbatim ingest-slack ~/Downloads/your_workspace_slack_export.zip --dry-run
+
+# Then ingest for real
+verbatim ingest-slack ~/Downloads/your_workspace_slack_export.zip \
+    --channel engineering --channel architecture \
+    --since 2026-04-01 \
+    --min-thread-messages 4
+```
+
+Each Slack thread (≥ `--min-thread-messages` messages) becomes its own extraction session. The output looks the same as ingesting a meeting transcript — same schema, same state graph — except `source_kind` is `slack_thread` and `source_path` is `slack://#channel/thread/<timestamp>`.
+
+Useful flags:
+
+| Flag | Use |
+|---|---|
+| `--channel` / `-c` | Restrict to specific channels (repeatable) |
+| `--since` / `--until` | ISO date window (YYYY-MM-DD) |
+| `--min-thread-messages` | Skip threads shorter than this (default 3) |
+| `--include-loose` | Also extract channel-day rollups of non-threaded messages |
+| `--limit` / `-n` | Stop after N units (cost cap) |
+| `--dry-run` | Show plan + cost estimate without making API calls |
+
+Get a Slack export from `Slack admin → Settings → Import/Export Data → Export`. No OAuth, no app, no scopes — the file is yours already.
 
 ### Query accumulated state
 
@@ -125,8 +153,9 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 | Phase | What |
 |---|---|
 | **v0.1.0** ✅ | CLI extraction. Confidence + source quoting. JSON + Markdown out. SQLite state graph. `ingest` / `query` / `resolve` CLI. MCP server. |
-| **v0.1.1** ✅ (current) | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
-| **v1** | Slack + GitHub PR comment connectors. Cross-session reconciliation. Linear projection. Web UI. |
+| **v0.1.1** ✅ | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
+| **v0.2.0** ✅ (current) | Slack workspace export connector. `ingest-slack` CLI with channel/date/length/limit/dry-run filters. 23 new tests. |
+| **v1** | GitHub PR comment connector. Cross-session reconciliation. Linear projection. Web UI. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 

@@ -1,0 +1,50 @@
+[
+  {
+    "type": "message",
+    "user": "U001",
+    "text": "Should we use Postgres or SQLite for the v0 state store?",
+    "ts": "1747560000.000100",
+    "thread_ts": "1747560000.000100",
+    "reply_count": 3
+  },
+  {
+    "type": "message",
+    "user": "U002",
+    "text": "<@U001> SQLite for v0. We can swap to Postgres when concurrency matters.",
+    "ts": "1747560120.000200",
+    "thread_ts": "1747560000.000100"
+  },
+  {
+    "type": "message",
+    "user": "U001",
+    "text": "Works. I'll have it wired by Wednesday.",
+    "ts": "1747560240.000300",
+    "thread_ts": "1747560000.000100"
+  },
+  {
+    "type": "message",
+    "user": "U003",
+    "text": "Sounds good. I'll review Thursday morning.",
+    "ts": "1747560360.000400",
+    "thread_ts": "1747560000.000100"
+  },
+  {
+    "type": "message",
+    "user": "U001",
+    "text": "lunch?",
+    "ts": "1747600000.000500"
+  },
+  {
+    "type": "message",
+    "user": "U002",
+    "text": "yes",
+    "ts": "1747600060.000600"
+  },
+  {
+    "type": "message",
+    "subtype": "channel_join",
+    "user": "U002",
+    "text": "<@U002> joined the channel",
+    "ts": "1747500000.000700"
+  }
+]

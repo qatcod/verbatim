@@ -1,15 +1,25 @@
 """verbatim CLI — extract, persist (ingest), and query accumulated team state."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from . import __version__, state, store
+from .connectors import slack_export
 from .extractor import DEFAULT_MODEL, extract
 from .renderers import to_json, to_markdown
 from .transcripts import load_transcript
@@ -132,6 +142,186 @@ def ingest_cmd(
             f"db: {store.resolve_db_path(db)}[/dim]"
         )
         err_console.print(Panel(body, title="ingested", border_style="green", expand=False))
+
+
+# ----------------------- ingest-slack (Slack export ZIP or dir) -----------------------
+
+
+@app.command(name="ingest-slack")
+def ingest_slack_cmd(
+    source: Path = typer.Argument(
+        ...,
+        help="Path to a Slack export ZIP file or extracted directory.",
+        exists=True,
+    ),
+    channel: list[str] | None = typer.Option(
+        None,
+        "--channel",
+        "-c",
+        help="Restrict to specific channels (repeatable). Default: all channels.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Only include messages after this ISO date (YYYY-MM-DD).",
+    ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help="Only include messages before this ISO date (YYYY-MM-DD).",
+    ),
+    min_thread_messages: int = typer.Option(
+        3,
+        "--min-thread-messages",
+        help="Skip threads with fewer than this many messages.",
+    ),
+    include_loose: bool = typer.Option(
+        False,
+        "--include-loose",
+        help="Also extract channel-day rollups of non-threaded messages (more noise).",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-n",
+        help="Stop after extracting this many units.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="List the units that would be extracted without making API calls.",
+    ),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Ingest a Slack workspace export. Each thread becomes its own session."""
+    since_dt = _parse_iso_date(since, "--since")
+    until_dt = _parse_iso_date(until, "--until")
+
+    try:
+        export = slack_export.load(source)
+    except (FileNotFoundError, ValueError) as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    err_console.print(
+        f"[dim]Loaded export from {source}: "
+        f"{len(export.users)} users, {len(export.channels)} channels[/dim]"
+    )
+
+    with export:
+        units = list(
+            export.iter_units(
+                channels=channel,
+                since=since_dt,
+                until=until_dt,
+                min_thread_messages=min_thread_messages,
+                include_loose_messages=include_loose,
+            )
+        )
+
+    if limit is not None:
+        units = units[:limit]
+
+    if not units:
+        err_console.print("[yellow]No units matched the filters.[/yellow]")
+        return
+
+    if dry_run:
+        _print_slack_dry_run(units)
+        return
+
+    _run_slack_ingest(units, model=model, db=db)
+
+
+def _print_slack_dry_run(units: list) -> None:
+    table = Table(show_header=True, header_style="bold cyan", title="Slack ingest plan (dry run)")
+    table.add_column("kind")
+    table.add_column("channel")
+    table.add_column("start (UTC)")
+    table.add_column("msgs", justify="right")
+    table.add_column("title")
+    for u in units:
+        table.add_row(
+            u.kind,
+            f"#{u.channel}",
+            u.start.strftime("%Y-%m-%d %H:%M"),
+            str(len(u.messages)),
+            u.title or "—",
+        )
+    console.print(table)
+    err_console.print(
+        f"[dim]{len(units)} units would be extracted. "
+        f"Estimated cost at Sonnet pricing: ~${len(units) * 0.07:.2f}[/dim]"
+    )
+
+
+def _run_slack_ingest(units: list, *, model: str | None, db: Path | None) -> None:
+    conn = state.open_db(db)
+    total_counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
+    failed = 0
+    total_in_tokens = 0
+    total_out_tokens = 0
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=err_console,
+    )
+
+    try:
+        with progress:
+            task = progress.add_task(
+                f"Extracting {len(units)} units",
+                total=len(units),
+            )
+            for unit in units:
+                progress.update(
+                    task,
+                    description=f"#{unit.channel} · {unit.kind} · {unit.start.strftime('%Y-%m-%d')}",
+                )
+                try:
+                    result, diag = extract(unit.transcript, model=model)
+                    summary = state.save_extraction(
+                        conn, result, diag,
+                        source_path=unit.source_label,
+                        source_kind=unit.source_kind,
+                    )
+                    for k, v in summary.counts.items():
+                        total_counts[k] += v
+                    total_in_tokens += diag.input_tokens
+                    total_out_tokens += diag.output_tokens
+                except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
+                progress.advance(task)
+    finally:
+        conn.close()
+
+    total = sum(total_counts.values())
+    body = (
+        f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
+        f"{total_counts['commitment']} commitments · "
+        f"{total_counts['decision']} decisions · "
+        f"{total_counts['open_question']} open questions · "
+        f"{total_counts['blocker']} blockers\n"
+        f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
+        f"failed: {failed}[/dim]"
+    )
+    err_console.print(Panel(body, title="slack ingest complete", border_style="green", expand=False))
+
+
+def _parse_iso_date(value: str | None, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        err_console.print(f"[red]{field_name} must be YYYY-MM-DD, got: {value}[/red]")
+        raise typer.Exit(code=2) from None
 
 
 # ----------------------- query subcommands -----------------------
