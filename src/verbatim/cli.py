@@ -21,6 +21,7 @@ from rich.table import Table
 
 from . import __version__, state, store
 from . import reconcile as reconcile_lib
+from . import slack_bot as slack_bot_lib
 from .connectors import github_pr, slack_api, slack_export
 from .extractor import DEFAULT_MODEL, extract
 from .projections import linear as linear_proj
@@ -39,6 +40,9 @@ app.add_typer(query_app)
 
 project_app = typer.Typer(name="project", help="Push extracted state to external trackers.")
 app.add_typer(project_app)
+
+slack_bot_app = typer.Typer(name="slack-bot", help="Run the Slack bot — slash commands + digest posting.")
+app.add_typer(slack_bot_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -854,6 +858,89 @@ def resolve_cmd(
 def version() -> None:
     """Print the verbatim version."""
     console.print(f"verbatim {__version__}")
+
+
+# ----------------------- slack-bot (consumer-facing Slack surface) -----------------------
+
+
+@slack_bot_app.command("run")
+def slack_bot_run_cmd(
+    bot_token: str | None = typer.Option(
+        None, "--bot-token", envvar="SLACK_BOT_TOKEN",
+        help="Bot token (xoxb-...). Reads $SLACK_BOT_TOKEN if not passed.",
+    ),
+    app_token: str | None = typer.Option(
+        None, "--app-token", envvar="SLACK_APP_TOKEN",
+        help="App-level token (xapp-...) with connections:write. Reads $SLACK_APP_TOKEN.",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Start the Slack bot. Blocks until interrupted (Ctrl-C).
+
+    Connects to Slack via Socket Mode — no public URL needed. Listens for
+    /verbatim slash commands and replies with state queries. Posts ephemeral
+    replies so command output is only visible to the invoker.
+
+    Setup: see slack_bot.py module docstring or the README. tl;dr — turn on
+    Socket Mode in your existing Slack App and register /verbatim as a slash
+    command.
+    """
+    if not bot_token:
+        err_console.print("[red]Bot token required.[/red] Set $SLACK_BOT_TOKEN or pass --bot-token.")
+        raise typer.Exit(code=2)
+    if not app_token:
+        err_console.print("[red]App token required.[/red] Set $SLACK_APP_TOKEN or pass --app-token.")
+        raise typer.Exit(code=2)
+
+    try:
+        bot = slack_bot_lib.VerbatimSlackBot(bot_token=bot_token, app_token=app_token, db_path=db)
+    except ValueError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from None
+
+    err_console.print(
+        Panel(
+            "[bold]Verbatim Slack bot running[/bold]\n"
+            "[dim]Connected via Socket Mode. Listening for /verbatim slash commands. "
+            "Ctrl-C to stop.[/dim]",
+            title="slack-bot",
+            border_style="green",
+            expand=False,
+        )
+    )
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        err_console.print("[dim]Shutting down.[/dim]")
+
+
+@slack_bot_app.command("digest")
+def slack_bot_digest_cmd(
+    channel: str = typer.Argument(
+        ..., help="Channel id (e.g. C0123456) or name (e.g. #engineering) to post to.",
+    ),
+    bot_token: str | None = typer.Option(
+        None, "--bot-token", envvar="SLACK_BOT_TOKEN",
+        help="Bot token (xoxb-...).",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Post a summary digest of current Verbatim state into a Slack channel.
+
+    Useful from cron (e.g. weekly Monday morning digest) or after a batch
+    ingest. Does not require Socket Mode (the bot does not need to be
+    running) — uses only the Web API.
+    """
+    if not bot_token:
+        err_console.print("[red]Bot token required.[/red] Set $SLACK_BOT_TOKEN or pass --bot-token.")
+        raise typer.Exit(code=2)
+    bot = slack_bot_lib.VerbatimSlackBot(bot_token=bot_token, app_token="not-needed-for-digest-only", db_path=db)
+    try:
+        result = bot.post_digest(channel)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Digest post failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(f"[green]✓[/green] digest posted to {channel} (ts: {result.get('ts', '?')})")
 
 
 # ----------------------- project (push to external trackers) -----------------------

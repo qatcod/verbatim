@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.4.0 — CLI extraction, SQLite state graph with **cross-session reconciliation**, MCP server, live Slack + Slack export + GitHub PR threads, **Linear projection**, calibrated prompt, 127-test pytest suite, CI.
+**Status:** v0.5.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, **Slack bot with slash commands + digest** (consumer-facing — no terminal required for non-technical users), calibrated prompt, 158-test pytest suite, CI.
 
 ---
 
@@ -189,6 +189,40 @@ Assignee resolution is best-effort: actor name → Linear user via displayName, 
 
 Deadline → Linear `dueDate` only when the deadline parses as a real date (`2026-05-23`, `2026-05-23T10:00:00Z`). Natural-language deadlines like "EOD Friday" deliberately don't become due-dates — you'd be promising precision the extractor didn't actually have.
 
+### Run the Slack bot — let non-technical users query state from inside Slack
+
+Engineers and admins use the CLI. Everyone else uses Slack. The bot lets your team run `/verbatim commitments`, `/verbatim show abc12345`, `/verbatim stats`, etc. directly from any channel, without ever opening a terminal.
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_APP_TOKEN=xapp-...
+verbatim slack-bot run                       # long-running, Ctrl-C to stop
+verbatim slack-bot digest \#engineering      # one-shot summary post
+```
+
+**Slack App setup (one-time, on the same App you use for `ingest-slack-api`):**
+
+1. **Settings → Socket Mode** → Enable. Generate an App-Level Token with `connections:write`. Copy the `xapp-...` token.
+2. **Features → Slash Commands** → Create New Command. Command: `/verbatim`. Description: "Query your team's Verbatim state." Request URL: any placeholder — Socket Mode doesn't use it.
+3. **OAuth & Permissions → Bot Token Scopes** → add `chat:write` and `commands` (alongside the `channels:history` / `channels:read` / `users:read` you already have for ingest).
+4. Reinstall the App. The bot will work on the *existing* `xoxb-...` token plus the new `xapp-...`.
+
+**No public URL required.** Socket Mode opens an outbound WebSocket from your bot process to Slack — your bot runs on a laptop, a self-hosted VM, anywhere with outbound internet. No ngrok, no Cloudflare tunnel, no nginx.
+
+**Slash commands supported:**
+
+| Command | What it does |
+|---|---|
+| `/verbatim commitments [actor]` | Open commitments, optionally filtered by name |
+| `/verbatim decisions` | Recent decisions |
+| `/verbatim questions` | Unresolved questions |
+| `/verbatim blockers [owner]` | Current blockers, optionally filtered |
+| `/verbatim stats` | Counts overview |
+| `/verbatim show <id-prefix>` | Entity detail with all source quotes |
+| `/verbatim help` | Show available commands |
+
+Replies are ephemeral (only the invoker sees them) so channels stay quiet. Use `verbatim slack-bot digest <channel>` for explicit shared digests.
+
 ### Wire MCP into Claude Code
 
 Add to your Claude Code config (`~/.claude/settings.json` or workspace settings):
@@ -248,8 +282,11 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 | **v0.1.1** ✅ | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
 | **v0.2.0** ✅ | Slack workspace export connector. `ingest-slack` CLI with channel/date/length/limit/dry-run filters. |
 | **v0.3.0** ✅ | Live Slack Web API connector (`ingest-slack-api`) + GitHub PR connector (`ingest-github`). Shared Slack primitives in `slack_common`. |
-| **v0.4.0** ✅ (current) | Cross-session reconciliation with `canonical_id`/`merged_at`, rapidfuzz matcher, `reconcile`/`link`/`unlink`/`show` commands, folded-by-default queries. Linear projection (`project linear`/`project status`/`unproject`) with idempotent issue creation, user resolution, and verbatim-quote-bearing descriptions. 42 new tests. |
-| **v1** | LLM-assisted reconciliation for borderline cases. Linear → Verbatim sync-back (issue status flows into entity state). Web UI. CLI flag for `--auto-reconcile` on ingest commands. |
+| **v0.4.0** ✅ | Cross-session reconciliation with `canonical_id`/`merged_at`, rapidfuzz matcher, `reconcile`/`link`/`unlink`/`show` commands, folded-by-default queries. Linear projection with idempotent issue creation, user resolution, verbatim-quote-bearing descriptions. |
+| **v0.4.1** ✅ | `--auto-reconcile` flags on every ingest command so continuous-ingest paths merge in real time. |
+| **v0.5.0** ✅ (current) | **Slack bot** with Socket Mode (no public URL) — `/verbatim` slash commands for non-technical users, ephemeral replies, digest posting. The consumer-facing surface. 31 new tests. |
+| **v0.6** | Read-mostly web view (`verbatim serve`). Web UI for browsing state, walking merged groups, manual link/unlink. |
+| **v1** | LLM-assisted reconciliation for borderline cases. Linear → Verbatim sync-back. Email digest. Hosted-SaaS deployment path. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 

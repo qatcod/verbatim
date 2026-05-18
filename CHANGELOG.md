@@ -2,6 +2,42 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-05-19
+
+The consumer-facing surface. Non-technical users no longer need a terminal — they interact with Verbatim from inside Slack.
+
+### Added — Slack bot (Socket Mode)
+
+- New `slack_bot.py` module — `VerbatimSlackBot` class with Socket Mode connection, slash-command dispatch, ephemeral replies, and digest posting.
+- **No public URL required.** Uses Slack's Socket Mode (outbound WebSocket from the bot to Slack), so the bot deploys on a laptop, a self-hosted VM, anywhere with outbound internet. No ngrok, no Cloudflare tunnel, no nginx.
+- Slash command `/verbatim` supports:
+  - `commitments [actor]` — open commitments, optionally filtered
+  - `decisions` — recent decisions
+  - `questions` / `open-questions` / `open` — unresolved questions
+  - `blockers [owner]` — current blockers
+  - `stats` — overall counts
+  - `show <id-prefix>` — entity detail with all source quotes
+  - `help` (also shown for empty input or unknown subcommand)
+- Replies are **ephemeral** (only the invoker sees them) so channels stay quiet. Falls back to in-channel post when no user_id is present.
+- `verbatim slack-bot run` — long-running bot process. Connects via Socket Mode, blocks until Ctrl-C.
+- `verbatim slack-bot digest <channel>` — one-shot digest post. Useful from cron (e.g. weekly Monday morning) or after batch ingest. Doesn't need Socket Mode — just the bot token + Web API.
+- 31 tests: command parsing, all formatters, dispatch over a seeded SQLite, constructor validation, slash-command handler routing (ephemeral vs in-channel vs no-op), digest content. `WebClient` mocked via injectable `FakeWebClient`. Socket Mode loop intentionally not exercised — it's a thin wrapper around Slack's WebSocket and would only test their SDK.
+
+### Setup (one-time, in the same Slack App you use for `ingest-slack-api`)
+
+1. **Settings → Socket Mode** → Enable. Generate App-Level Token with `connections:write` scope. Copy `xapp-...`.
+2. **Features → Slash Commands** → Create New Command. Command: `/verbatim`. Request URL can be any placeholder (Socket Mode doesn't use it).
+3. **OAuth & Permissions → Bot Token Scopes** → add `chat:write` and `commands` (you already have `channels:history`, `channels:read`, `users:read` from `ingest-slack-api`).
+4. Reinstall the App. Run: `SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... verbatim slack-bot run`.
+
+### Dependencies
+- `websocket-client >= 1.6.0` (Socket Mode transport)
+
+### Why this is the unlock
+v0.4.x was a complete operator tool — engineers and admins could ingest, reconcile, project. But the people whose meetings produce the state (PMs, leads, execs) had no surface. v0.5 fixes that. The CLI stays the operator tool; the bot is everyone else.
+
+The intentional next surface after this is `verbatim serve` — a read-mostly web view for browsing state and walking through merged entities. v0.6 territory.
+
 ## [0.4.1] — 2026-05-19
 
 ### Added
