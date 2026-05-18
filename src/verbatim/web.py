@@ -108,11 +108,29 @@ _ICONS: dict[str, str] = {
         '<polyline points="15 3 21 3 21 9"/>'
         '<line x1="10" y1="14" x2="21" y2="3"/></svg>'
     ),
+    # The Verbatim mark: two pairs of pill-shaped marks, tilted -12°.
+    # The left pair (lower) reads as an opening curly quote; the right
+    # pair (higher) reads as a closing one. The negative space between
+    # them is the captured statement — the "verbatim" content.
     "logo": (
-        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h6"/>'
-        '<circle cx="19" cy="17" r="3" fill="currentColor" stroke="none"/></svg>'
+        '<svg width="28" height="28" viewBox="0 0 32 32" fill="currentColor" '
+        'xmlns="http://www.w3.org/2000/svg" aria-label="Verbatim">'
+        '<g transform="rotate(-12 16 16)">'
+        '<rect x="4" y="14" width="4" height="10" rx="2"/>'
+        '<rect x="10" y="14" width="4" height="10" rx="2"/>'
+        '<rect x="18" y="8" width="4" height="10" rx="2"/>'
+        '<rect x="24" y="8" width="4" height="10" rx="2"/>'
+        '</g></svg>'
+    ),
+    "search": (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+    ),
+    "results": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
     ),
 }
 
@@ -463,6 +481,110 @@ a.entity-ref:hover {
   color: var(--accent); margin-top: 4px;
 }
 
+/* ── sidebar search ─────────────────────────────────────────────────── */
+.sidebar-search {
+  margin: 16px 4px 12px;
+  position: relative;
+}
+.sidebar-search input {
+  width: 100%;
+  padding: 8px 12px 8px 32px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.sidebar-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+.sidebar-search input::placeholder { color: var(--muted-2); }
+.sidebar-search .search-icon {
+  position: absolute;
+  left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.sidebar-search .kbd {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  background: var(--surface-3); color: var(--muted);
+  padding: 1px 6px; border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.sidebar-search input:focus + .kbd { display: none; }
+
+/* ── search results ─────────────────────────────────────────────────── */
+.search-results-group { margin-bottom: 24px; }
+.search-results-group h3 {
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin: 0 0 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.search-results-group h3 .count {
+  background: var(--surface-3); color: var(--muted);
+  padding: 1px 7px; border-radius: 9999px;
+  font-size: 11px; font-weight: 500;
+}
+.result-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.result-row:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.result-row .result-icon {
+  width: 28px; height: 28px; border-radius: 6px;
+  background: var(--accent-bg); color: var(--accent);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.result-row .result-body { flex: 1; min-width: 0; }
+.result-row .result-title { font-weight: 500; color: var(--fg); margin-bottom: 2px; }
+.result-row .result-sub { color: var(--muted); font-size: 12.5px; }
+.result-row .result-quote {
+  margin-top: 6px; font-size: 12.5px; color: var(--fg-2);
+  background: var(--surface-2); padding: 6px 10px; border-radius: 4px;
+  border-left: 2px solid var(--accent-2);
+}
+
+mark {
+  background: var(--accent-bg); color: var(--accent);
+  padding: 0 2px; border-radius: 2px;
+}
+
+/* ── activity feed ──────────────────────────────────────────────────── */
+.activity-feed {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 0;
+}
+.activity-item {
+  display: flex; gap: 12px; padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0; margin-top: 7px;
+}
+.activity-item.muted .activity-dot { background: var(--muted); }
+.activity-body { flex: 1; min-width: 0; }
+.activity-when {
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--muted); font-size: 12px;
+}
+.activity-text { color: var(--fg-2); font-size: 13.5px; }
+
 /* ── responsive ─────────────────────────────────────────────────────── */
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
@@ -476,7 +598,21 @@ a.entity-ref:hover {
 """
 
 
-def _shell(title: str, body: str, active: str = "") -> str:
+_SEARCH_SHORTCUT_JS = """
+<script>
+(function () {
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && !['INPUT','TEXTAREA'].includes(e.target.tagName)) {
+      const box = document.getElementById('sidebar-search-input');
+      if (box) { e.preventDefault(); box.focus(); box.select(); }
+    }
+  });
+})();
+</script>
+"""
+
+
+def _shell(title: str, body: str, active: str = "", search_q: str = "") -> str:
     nav_items = []
     for path, label, icon in _NAV_LINKS:
         is_active = "active" if path == active else ""
@@ -485,6 +621,16 @@ def _shell(title: str, body: str, active: str = "") -> str:
             f'<a href="{html.escape(path)}" class="{is_active}">'
             f"{icon_svg}<span>{html.escape(label)}</span></a>"
         )
+
+    search_input = (
+        '<form class="sidebar-search" method="get" action="/search">'
+        f'<span class="search-icon">{_ICONS["search"]}</span>'
+        f'<input type="text" name="q" id="sidebar-search-input" '
+        f'placeholder="Search…" value="{html.escape(search_q)}" '
+        'autocomplete="off">'
+        '<span class="kbd">/</span>'
+        '</form>'
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -500,8 +646,9 @@ def _shell(title: str, body: str, active: str = "") -> str:
     <div class="brand">
       {_ICONS["logo"]}
       <span class="name">Verbatim</span>
-      <span class="badge-version">v0.6</span>
+      <span class="badge-version">v0.7</span>
     </div>
+    {search_input}
     <nav class="side">
       <div class="group-label">State</div>
       {"".join(nav_items[:5])}
@@ -511,6 +658,7 @@ def _shell(title: str, body: str, active: str = "") -> str:
   </aside>
   <main>{body}</main>
 </div>
+{_SEARCH_SHORTCUT_JS}
 </body>
 </html>"""
 
@@ -1061,6 +1209,149 @@ async def entity_detail(request: Request) -> HTMLResponse:
     return HTMLResponse(_shell("Entity", body))
 
 
+# ----------------------- search -----------------------
+
+
+_KIND_LABELS = {
+    "commitment": "Commitments",
+    "decision": "Decisions",
+    "open_question": "Open questions",
+    "blocker": "Blockers",
+    "source_match": "Source quote matches",
+}
+
+
+def _highlight(text: str, query: str) -> str:
+    """Wrap case-insensitive matches of `query` in <mark>. Result is HTML-safe."""
+    if not text or not query:
+        return html.escape(text or "")
+    safe_text = text
+    safe_query = query
+    out: list[str] = []
+    lower_text = safe_text.lower()
+    lower_query = safe_query.lower()
+    i = 0
+    qlen = len(safe_query)
+    while True:
+        idx = lower_text.find(lower_query, i)
+        if idx == -1:
+            out.append(html.escape(safe_text[i:]))
+            break
+        out.append(html.escape(safe_text[i:idx]))
+        out.append("<mark>" + html.escape(safe_text[idx : idx + qlen]) + "</mark>")
+        i = idx + qlen
+    return "".join(out)
+
+
+def _result_summary(entity: dict[str, Any]) -> str:
+    """Pick the best human label for an entity in a search result row."""
+    p = entity.get("payload", {})
+    kind = entity["kind"]
+    if kind == "commitment":
+        return f"{p.get('actor') or '?'}: {p.get('deliverable') or '?'}"
+    if kind == "decision":
+        return f"{p.get('topic') or '?'} → {p.get('outcome') or '?'}"
+    if kind == "open_question":
+        return p.get("question") or p.get("topic") or "?"
+    if kind == "blocker":
+        return (
+            f"{p.get('blocked_thing') or '?'} blocked by {p.get('blocked_by') or '?'}"
+        )
+    return entity["id"]
+
+
+def _render_search_result(entity: dict[str, Any], query: str) -> str:
+    """One row in the search results. Highlights matches in title + quote."""
+    title = _highlight(_result_summary(entity), query)
+    kind_label = entity["kind"].replace("_", " ")
+    sub = (
+        f'<span class="badge {html.escape(entity["confidence"])}">'
+        f'{html.escape(entity["confidence"])}</span> · '
+        f'{html.escape(kind_label)} · '
+        f'<a href="/entity/{html.escape(entity["id"])}" class="entity-ref">'
+        f'{html.escape(entity["id"][:8])}…</a>'
+    )
+    # Show one matched source quote (or the first source if nothing matches)
+    matching_quote = ""
+    for s in entity.get("sources", []):
+        q = s.get("verbatim_quote") or ""
+        if query.lower() in q.lower():
+            matching_quote = (
+                f'<div class="result-quote">'
+                f'{_highlight(q, query)}'
+                "</div>"
+            )
+            break
+    if not matching_quote and entity.get("sources"):
+        first = entity["sources"][0]
+        q = first.get("verbatim_quote") or ""
+        if q:
+            matching_quote = (
+                f'<div class="result-quote">{_highlight(q, query)}</div>'
+            )
+    return (
+        f'<a href="/entity/{html.escape(entity["id"])}" class="result-row">'
+        f'<span class="result-icon">{_ICONS["results"]}</span>'
+        f'<div class="result-body">'
+        f'<div class="result-title">{title}</div>'
+        f'<div class="result-sub">{sub}</div>'
+        f"{matching_quote}"
+        "</div></a>"
+    )
+
+
+async def search_page(request: Request) -> HTMLResponse:
+    q = (request.query_params.get("q") or "").strip()
+
+    if not q:
+        body = (
+            _page_header("Search", subtitle="empty query")
+            + _empty(
+                "Type something",
+                "Search matches on actor, topic, payload, and verbatim source quotes.",
+                "/verbatim Friday    (or click the search box and start typing)",
+            )
+        )
+        return HTMLResponse(_shell("Search", body, active="", search_q=""))
+
+    conn = _open_conn()
+    try:
+        results = state.search(conn, q)
+    finally:
+        conn.close()
+
+    total = sum(len(v) for v in results.values())
+    if total == 0:
+        body = (
+            _page_header(f'Search: "{q}"', subtitle="0 results")
+            + _empty(
+                "No matches",
+                "Try fewer characters or a different word.",
+            )
+        )
+        return HTMLResponse(_shell("Search", body, active="", search_q=q))
+
+    sections: list[str] = []
+    for kind in ("commitment", "decision", "open_question", "blocker", "source_match"):
+        items = results.get(kind, [])
+        if not items:
+            continue
+        label = _KIND_LABELS[kind]
+        rows_html = "".join(_render_search_result(e, q) for e in items)
+        sections.append(
+            '<div class="search-results-group">'
+            f'<h3>{html.escape(label)} <span class="count">{len(items)}</span></h3>'
+            f"{rows_html}"
+            "</div>"
+        )
+
+    body = (
+        _page_header(f'Search: "{q}"', subtitle=f"{total} match(es)")
+        + "".join(sections)
+    )
+    return HTMLResponse(_shell("Search", body, active="", search_q=q))
+
+
 # ----------------------- filter form helper -----------------------
 
 
@@ -1107,6 +1398,7 @@ def create_app(db_path: Path | None = None) -> Starlette:
     _AppState.db_path = db_path
     routes = [
         Route("/", home),
+        Route("/search", search_page),
         Route("/commitments", commitments),
         Route("/decisions", decisions),
         Route("/open-questions", open_questions),

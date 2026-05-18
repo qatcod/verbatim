@@ -2,6 +2,26 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-05-19
+
+### Added — Cross-entity search
+- New `state.search(query)` / `store.search_entities(query)` — case-insensitive substring match across `primary_actor`, `primary_topic`, `payload_json`, and `verbatim_quote`. Grouped results by kind plus a `source_match` bucket for entities matched only via a quote. Direct-match entities dedupe against source-match.
+- New `GET /search?q=…` route. Group headers per kind, result rows with confidence badge + entity ref, matched quote inline with `<mark>` highlighting.
+- Sidebar search box on every page (sticky). Carries the query back on the results page.
+- Keyboard shortcut: pressing `/` anywhere focuses the sidebar search input (skipped when typing in any other input/textarea). 8 lines of inline JS, no build step.
+
+### Added — Brand identity
+- New Verbatim logomark: two pairs of pill-shaped marks tilted -12°, reading as an opening quote (lower-left) and a closing quote (upper-right) framing a captured statement — the negative space *is* the verbatim content. Pure inline SVG, ~280 bytes, scales to any size, follows `currentColor`.
+- Replaces the v0.6.x placeholder mark (generic list-with-dot).
+- Brief design rationale: the product's name *is* its core promise — every extraction must carry a verbatim quote. The mark visualizes that contract: quote → captured statement → quote.
+
+### Tests
+- 213 total (+21 new). Coverage: state.search behavior across all 4 kinds + source-only match + dedup + case-insensitivity, `/search` route empty / no-results / matched / highlighted, search box presence + query preservation across pages, keyboard-shortcut JS embedded, highlight() correctness + XSS escape.
+
+### Why
+- v0.6 had data and surfaces but no fast way to find a specific item. Search was the obvious gap. It's also the connective tissue between surfaces — once you've found something in the web UI, you can copy the entity-id prefix into the Slack bot's `/verbatim show` or the CLI's `verbatim show`.
+- The placeholder logo from v0.6.0 was holding the brand back. v0.7.0's mark is the one that's worth putting in a deck.
+
 ## [0.6.2] — 2026-05-19
 
 ### Changed — web UI redesign

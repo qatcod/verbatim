@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.6.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, Slack bot with slash commands + digest, **web UI (`verbatim serve`)**, **email digest (`verbatim digest email`)**, calibrated prompt, 189-test pytest suite, CI.
+**Status:** v0.7.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, Slack bot, web UI (`verbatim serve`) with **cross-entity search + redesigned dashboard + brand mark**, email digest, calibrated prompt, 213-test pytest suite, CI.
 
 ---
 

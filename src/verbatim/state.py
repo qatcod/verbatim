@@ -240,6 +240,31 @@ def stats(conn: sqlite3.Connection) -> dict[str, int]:
     return store.db_stats(conn)
 
 
+def search(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    limit_per_kind: int = 25,
+) -> dict[str, list[dict[str, Any]]]:
+    """Search across all entity kinds + source quotes.
+
+    Returns a dict with keys: commitment, decision, open_question, blocker,
+    source_match. Each value is a list of canonical entities matched. An
+    entity matched only by a source quote appears in `source_match` and not
+    in its kind-specific bucket (to avoid double-counting).
+
+    Match is case-insensitive substring on: primary_actor, primary_topic,
+    payload_json (everything else, JSON-stringified), and verbatim_quote.
+    """
+    q = query.strip()
+    if not q:
+        return {
+            "commitment": [], "decision": [], "open_question": [],
+            "blocker": [], "source_match": [],
+        }
+    return store.search_entities(conn, q, limit_per_kind=limit_per_kind)
+
+
 # Payload serializers — preserve the kind-specific fields not in the
 # denormalized columns. Kept in one place so payload schema is auditable.
 

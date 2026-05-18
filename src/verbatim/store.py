@@ -542,3 +542,77 @@ def update_projection_status(
         (status, utc_now_iso(), projection_id),
     )
     return cur.rowcount > 0
+
+
+# ----------------------- search -----------------------
+
+
+def search_entities(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    limit_per_kind: int = 25,
+) -> dict[str, list[dict[str, Any]]]:
+    """Cross-kind substring search.
+
+    Direct entity matches (actor/topic/payload) are bucketed by kind.
+    Entities matched only via a source quote land in `source_match`,
+    deduped against the direct buckets.
+    """
+    like = f"%{query}%"
+    out: dict[str, list[dict[str, Any]]] = {
+        "commitment": [], "decision": [], "open_question": [],
+        "blocker": [], "source_match": [],
+    }
+    direct_ids: set[str] = set()
+
+    for kind in ("commitment", "decision", "open_question", "blocker"):
+        rows = conn.execute(
+            """
+            SELECT id FROM entities
+            WHERE kind = ?
+              AND canonical_id IS NULL
+              AND (
+                  primary_actor LIKE ? COLLATE NOCASE
+                  OR primary_topic LIKE ? COLLATE NOCASE
+                  OR payload_json LIKE ? COLLATE NOCASE
+              )
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (kind, like, like, like, limit_per_kind),
+        ).fetchall()
+        for r in rows:
+            entity = fetch_entity(conn, r["id"])
+            if entity:
+                merged_ids = _fetch_merged_member_ids(conn, entity["id"])
+                entity["merged_count"] = len(merged_ids)
+                for mid in merged_ids:
+                    entity["sources"].extend(fetch_sources(conn, mid))
+                out[kind].append(entity)
+                direct_ids.add(entity["id"])
+
+    # Quote-only matches: entities whose source-text matched but whose direct
+    # fields didn't.
+    quote_rows = conn.execute(
+        """
+        SELECT DISTINCT e.id, e.created_at FROM entity_sources es
+        JOIN entities e ON e.id = es.entity_id
+        WHERE es.verbatim_quote LIKE ? COLLATE NOCASE
+          AND e.canonical_id IS NULL
+        ORDER BY e.created_at DESC
+        LIMIT ?
+        """,
+        (like, limit_per_kind * 4),
+    ).fetchall()
+    for r in quote_rows:
+        if r["id"] in direct_ids:
+            continue
+        entity = fetch_entity(conn, r["id"])
+        if entity:
+            merged_ids = _fetch_merged_member_ids(conn, entity["id"])
+            entity["merged_count"] = len(merged_ids)
+            for mid in merged_ids:
+                entity["sources"].extend(fetch_sources(conn, mid))
+            out["source_match"].append(entity)
+    return out
