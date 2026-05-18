@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.2 — CLI extraction, SQLite-backed state graph, MCP server. Connectors for Slack / GitHub / Linear projection on the v1 roadmap.
+**Status:** v0.1.1 — CLI extraction, SQLite-backed state graph, MCP server, calibrated extraction prompt, 42-test pytest suite, CI. Connectors for Slack / GitHub / Linear projection on the v1 roadmap.
 
 ---
 
@@ -124,8 +124,8 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 
 | Phase | What |
 |---|---|
-| **v0** ✅ | CLI extraction. Confidence + source quoting. JSON + Markdown out. |
-| **v0.2** ✅ (current) | SQLite state graph. `ingest` / `query` / `resolve` CLI. MCP server. |
+| **v0.1.0** ✅ | CLI extraction. Confidence + source quoting. JSON + Markdown out. SQLite state graph. `ingest` / `query` / `resolve` CLI. MCP server. |
+| **v0.1.1** ✅ (current) | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
 | **v1** | Slack + GitHub PR comment connectors. Cross-session reconciliation. Linear projection. Web UI. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
