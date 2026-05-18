@@ -12,12 +12,20 @@ to Slack and reads events off it. **No public URL or webhook endpoint is needed.
 This is what makes the bot deployable on a laptop, a self-hosted server, or
 anywhere with outbound internet — no nginx, no Cloudflare tunnel, no ngrok.
 
+# Replying to slash commands
+
+Slack provides a one-shot `response_url` with every slash-command invocation
+that's valid for 30 minutes. Posting JSON to it delivers the reply as an
+ephemeral message to the invoker — **without requiring the bot to be a member
+of the channel**. We use that path instead of `chat.postEphemeral`, which
+returns `not_in_channel` whenever someone runs `/verbatim` in a channel the
+bot hasn't been invited to. This makes the bot work in any channel by default.
+
 # Auth
 
 Two tokens are required:
 
-- **Bot Token** (`xoxb-...`): for posting messages and reading users. Same token
-  you use for `ingest-slack-api`.
+- **Bot Token** (`xoxb-...`): for posting messages (digest command).
 - **App-Level Token** (`xapp-...`): for the Socket Mode connection. Generate
   this in your Slack App settings → Basic Information → App-Level Tokens, with
   the `connections:write` scope.
@@ -37,9 +45,6 @@ Command). The bot supports these sub-commands in the text argument:
 /verbatim help
 ```
 
-Responses are ephemeral by default (only the invoker sees them) to keep channels
-quiet. We could add `share` modifiers later for in-channel responses.
-
 # Digest
 
 `post_digest(channel_id)` pushes the same summary into a channel publicly. Use
@@ -53,6 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 from slack_sdk import WebClient
 from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
@@ -292,6 +298,7 @@ class VerbatimSlackBot:
         db_path: Path | None = None,
         web_client: WebClient | None = None,
         socket_client: SocketModeClient | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         if not bot_token:
             raise ValueError("bot_token is required (xoxb-... — set SLACK_BOT_TOKEN).")
@@ -299,6 +306,7 @@ class VerbatimSlackBot:
             raise ValueError("app_token is required for Socket Mode (xapp-... — set SLACK_APP_TOKEN).")
         self._web = web_client or WebClient(token=bot_token)
         self._socket = socket_client or SocketModeClient(app_token=app_token, web_client=self._web)
+        self._http = http_client or httpx.Client(timeout=10.0)
         self._db_path = db_path
 
     # ----- inbound: slash commands -----
@@ -319,6 +327,7 @@ class VerbatimSlackBot:
         text = payload.get("text") or ""
         response_url = payload.get("response_url")
         channel_id = payload.get("channel_id")
+        user_id = payload.get("user_id")
         if not response_url and not channel_id:
             log.warning("slash command had no response_url or channel_id: %r", payload)
             return
@@ -330,13 +339,53 @@ class VerbatimSlackBot:
         finally:
             conn.close()
 
-        # Use the ephemeral chat.postEphemeral so only the invoker sees the reply.
-        # Falls back to chat.postMessage in-channel if user_id is missing.
-        user_id = payload.get("user_id")
+        # Prefer response_url — Slack provides this specifically so bots can
+        # reply ephemerally to slash commands without needing channel membership.
+        # This avoids the `not_in_channel` error users hit when they run
+        # /verbatim in a channel the bot hasn't been invited to.
+        if response_url:
+            try:
+                self._post_response_url(response_url, body)
+                return
+            except Exception:  # noqa: BLE001
+                log.exception("failed posting to response_url; falling back to Web API")
+
+        # Fallbacks if response_url is missing or failed.
         if user_id and channel_id:
-            self._web.chat_postEphemeral(channel=channel_id, user=user_id, text=body)
-        elif channel_id:
-            self._web.chat_postMessage(channel=channel_id, text=body)
+            try:
+                self._web.chat_postEphemeral(channel=channel_id, user=user_id, text=body)
+                return
+            except Exception:  # noqa: BLE001
+                log.exception("chat.postEphemeral failed; trying open-DM fallback")
+                if self._try_dm_user(user_id, body):
+                    return
+        if channel_id:
+            try:
+                self._web.chat_postMessage(channel=channel_id, text=body)
+            except Exception:  # noqa: BLE001
+                log.exception("chat.postMessage failed too; giving up on this command")
+
+    def _post_response_url(self, url: str, text: str) -> None:
+        """POST a slash-command reply via Slack's per-invocation response_url."""
+        resp = self._http.post(
+            url,
+            json={"response_type": "ephemeral", "text": text},
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+
+    def _try_dm_user(self, user_id: str, text: str) -> bool:
+        """Open a DM with the user and send the message. Returns True if sent."""
+        try:
+            conv = self._web.conversations_open(users=user_id)
+            dm_channel = (conv.get("channel") or {}).get("id")
+            if not dm_channel:
+                return False
+            self._web.chat_postMessage(channel=dm_channel, text=text)
+            return True
+        except Exception:  # noqa: BLE001
+            log.exception("DM fallback failed")
+            return False
 
     # ----- run loop -----
 

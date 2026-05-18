@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "verbatim"
-version = "0.5.0"
+version = "0.6.0"
 description = "The AI memory layer for engineering teams. Extracts structured commitments, decisions, open questions, and blockers from meeting transcripts — every extraction sourced to a verbatim quote."
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,6 +32,8 @@ dependencies = [
     "websocket-client>=1.6.0",
     "httpx>=0.27.0",
     "rapidfuzz>=3.5.0",
+    "starlette>=0.36.0",
+    "uvicorn[standard]>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -69,3 +71,7 @@ ignore = ["B008"]
 # read better as single lines than wrapped, even when over 120 chars.
 "src/verbatim/prompts.py" = ["E501"]
 "src/verbatim/schema.py" = ["E501"]
+# CSS rules and HTML f-strings; breaking these mid-line hurts readability
+# more than the line-length budget helps.
+"src/verbatim/web.py" = ["E501"]
+"src/verbatim/email_digest.py" = ["E501"]

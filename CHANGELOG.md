@@ -2,6 +2,34 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-05-19
+
+Two new consumer surfaces (read-mostly web UI, email digest) plus a hotfix for the v0.5 Slack bot.
+
+### Added — `verbatim serve` (read-mostly web UI)
+- New `src/verbatim/web.py` — Starlette app with dashboard, list pages per kind (commitments/decisions/open-questions/blockers), entity detail with all merged source quotes, sessions, projections.
+- `verbatim serve [--host 127.0.0.1] [--port 8765] [--db ...]` boots `uvicorn` on the app.
+- Hand-rolled HTML via f-strings + `html.escape` on every user-supplied value; tiny inline CSS, no build step, no Jinja files to package.
+- Read-only for v0.6 by design — mutating HTTP endpoints without auth would be a footgun on a multi-user host. Resolve / link / unlink stay on the CLI for now.
+- Filters on each list page: `?actor=`, `?owner=`, `?raised_by=`, `?min_confidence=`, `?ungrouped=1`. Inline `<form>` for browser users.
+- 16 tests: every route renders, filters reflect in output, 404 on missing entity, **explicit XSS escape test** with `<script>`/`<img onerror>` in payloads.
+
+### Added — `verbatim digest email`
+- New `src/verbatim/email_digest.py` — renders the same digest shape used by Slack (stats + recent commitments + blockers + open questions) as both plain text *and* HTML; ships as multipart MIME via SMTP.
+- `verbatim digest email --to addr [--to addr2] [--smtp-host X] [--smtp-port 587]` with config readable from `$SMTP_HOST` / `$SMTP_PORT` / `$SMTP_USER` / `$SMTP_PASSWORD` / `$SMTP_FROM`.
+- STARTTLS by default, `--ssl` for SMTPS. SMTP-only on purpose — universal across providers (Gmail, SES SMTP interface, SendGrid SMTP, Postmark SMTP).
+- 13 tests: render returns text + HTML, content gates on what's actually in the DB, HTML escapes user content, MIME structure correct, SMTP send mocked across STARTTLS / SSL / no-auth paths.
+
+### Fixed — Slack bot `not_in_channel`
+The bot was using `chat.postEphemeral` to reply to slash commands, which Slack rejects with `not_in_channel` whenever someone runs `/verbatim` in a channel the bot hasn't been invited to. v0.6 switches to Slack's per-invocation `response_url` (POST JSON, no channel membership required) with a three-stage fallback: `response_url` → `chat.postEphemeral` → open a DM with the user. Means `/verbatim` works in any channel the user is in, regardless of where the bot has been invited.
+
+### Dependencies
+- `starlette >= 0.36.0` (already transitive via `mcp`, now explicit)
+- `uvicorn[standard] >= 0.27.0` (already transitive, now explicit)
+
+### Tests
+- 189 total, all green. +29 new (16 web, 13 email) + reworked slash-command fallback tests.
+
 ## [0.5.0] — 2026-05-19
 
 The consumer-facing surface. Non-technical users no longer need a terminal — they interact with Verbatim from inside Slack.

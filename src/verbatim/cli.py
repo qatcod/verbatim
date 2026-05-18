@@ -19,7 +19,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import __version__, state, store
+from . import __version__, email_digest, state, store, web
 from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
 from .connectors import github_pr, slack_api, slack_export
@@ -43,6 +43,9 @@ app.add_typer(project_app)
 
 slack_bot_app = typer.Typer(name="slack-bot", help="Run the Slack bot — slash commands + digest posting.")
 app.add_typer(slack_bot_app)
+
+digest_app = typer.Typer(name="digest", help="Send state digests over various channels.")
+app.add_typer(digest_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -858,6 +861,127 @@ def resolve_cmd(
 def version() -> None:
     """Print the verbatim version."""
     console.print(f"verbatim {__version__}")
+
+
+# ----------------------- serve (web UI) -----------------------
+
+
+@app.command("serve")
+def serve_cmd(
+    host: str = typer.Option(
+        "127.0.0.1", "--host",
+        help="Bind address. Stays local by default — don't expose without auth.",
+    ),
+    port: int = typer.Option(8765, "--port", "-p", help="Port to bind."),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Run the Verbatim web UI.
+
+    Read-mostly view of the state graph: dashboard, list pages per kind, entity
+    detail with all source quotes, sessions, and active projections. Default
+    binds to 127.0.0.1 — exposing this on a public interface is not safe yet
+    (no auth, no CSRF, mutations would be needed for a multi-user flow).
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        err_console.print(
+            "[red]uvicorn is required for `verbatim serve`. "
+            "Reinstall with: pip install -e .[/red]"
+        )
+        raise typer.Exit(code=1) from None
+
+    application = web.create_app(db_path=db)
+    err_console.print(
+        Panel(
+            f"[bold]Verbatim web UI[/bold]\n"
+            f"Open: [link=http://{host}:{port}]http://{host}:{port}[/link]\n"
+            f"[dim]Local-only by default — see --host to change.[/dim]",
+            title="serve",
+            border_style="green",
+            expand=False,
+        )
+    )
+    uvicorn.run(application, host=host, port=port, log_level="warning")
+
+
+# ----------------------- digest email -----------------------
+
+
+@digest_app.command("email")
+def digest_email_cmd(
+    to: list[str] = typer.Option(
+        ..., "--to", help="Recipient email(s). Repeatable.",
+    ),
+    smtp_host: str | None = typer.Option(
+        None, "--smtp-host", envvar="SMTP_HOST",
+        help="SMTP server. Reads $SMTP_HOST if not passed.",
+    ),
+    smtp_port: int = typer.Option(
+        587, "--smtp-port", envvar="SMTP_PORT", help="587 for STARTTLS, 465 for SSL.",
+    ),
+    smtp_user: str | None = typer.Option(
+        None, "--smtp-user", envvar="SMTP_USER",
+        help="SMTP auth username. Reads $SMTP_USER.",
+    ),
+    smtp_password: str | None = typer.Option(
+        None, "--smtp-password", envvar="SMTP_PASSWORD",
+        help="SMTP auth password. Reads $SMTP_PASSWORD.",
+    ),
+    sender: str | None = typer.Option(
+        None, "--from", envvar="SMTP_FROM",
+        help="From: header email. Reads $SMTP_FROM. Falls back to --smtp-user.",
+    ),
+    sender_name: str = typer.Option(
+        "Verbatim", "--sender-name",
+        help="Display name shown next to From: address.",
+    ),
+    use_ssl: bool = typer.Option(
+        False, "--ssl/--starttls",
+        help="--ssl for SMTPS (port 465). Default is STARTTLS.",
+    ),
+    brand: str = typer.Option(
+        "Verbatim", "--brand", help="Brand name in the digest subject/title.",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Render the current state as a digest email and send via SMTP.
+
+    Useful from cron: weekly Monday-morning digest to the team, or daily digest
+    to an exec. The same render is the basis for the Slack digest and the web
+    dashboard, so consumers see consistent content across surfaces.
+    """
+    if not smtp_host:
+        err_console.print("[red]SMTP host required (--smtp-host or $SMTP_HOST).[/red]")
+        raise typer.Exit(code=2)
+    sender_addr = sender or smtp_user
+    if not sender_addr:
+        err_console.print("[red]Sender required (--from / $SMTP_FROM, or --smtp-user).[/red]")
+        raise typer.Exit(code=2)
+
+    conn = state.open_db(db)
+    try:
+        content = email_digest.render_digest(conn, brand=brand)
+    finally:
+        conn.close()
+
+    msg = email_digest.build_message(
+        content, sender=sender_addr, recipients=to, sender_name=sender_name,
+    )
+    smtp_cfg = email_digest.SmtpConfig(
+        host=smtp_host, port=smtp_port,
+        username=smtp_user, password=smtp_password, use_ssl=use_ssl,
+    )
+    try:
+        email_digest.send_via_smtp(msg, smtp_cfg)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]SMTP send failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    console.print(
+        f"[green]✓[/green] digest sent to {len(to)} recipient(s) "
+        f"via {smtp_host}:{smtp_port}"
+    )
 
 
 # ----------------------- slack-bot (consumer-facing Slack surface) -----------------------

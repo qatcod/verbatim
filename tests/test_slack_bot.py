@@ -27,11 +27,17 @@ from verbatim.schema import (
 
 
 class FakeWebClient:
-    """Minimal stand-in for slack_sdk.WebClient — records every call."""
+    """Minimal stand-in for slack_sdk.WebClient — records every call.
 
-    def __init__(self) -> None:
+    `ephemeral_should_fail` simulates the `not_in_channel` Slack error to verify
+    the fallback chain.
+    """
+
+    def __init__(self, *, ephemeral_should_fail: bool = False) -> None:
         self.posts: list[dict[str, Any]] = []
         self.ephemerals: list[dict[str, Any]] = []
+        self.dm_opens: list[dict[str, Any]] = []
+        self.ephemeral_should_fail = ephemeral_should_fail
 
     def chat_postMessage(self, **kwargs: Any) -> Any:
         self.posts.append(kwargs)
@@ -39,14 +45,45 @@ class FakeWebClient:
 
     def chat_postEphemeral(self, **kwargs: Any) -> Any:
         self.ephemerals.append(kwargs)
+        if self.ephemeral_should_fail:
+            raise RuntimeError("simulated not_in_channel")
         return _FakeResponse({"ok": True, **kwargs})
+
+    def conversations_open(self, *, users: str) -> Any:
+        self.dm_opens.append({"users": users})
+        return _FakeResponse({"ok": True, "channel": {"id": "D-" + users}})
+
+
+class FakeHttpClient:
+    """Minimal stand-in for httpx.Client.post used by response_url path."""
+
+    def __init__(self, *, should_fail: bool = False) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self.should_fail = should_fail
+
+    def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str]) -> Any:
+        self.posts.append({"url": url, "json": json, "headers": headers})
+        if self.should_fail:
+            raise RuntimeError("simulated response_url failure")
+        return _FakeHttpResponse()
+
+
+class _FakeHttpResponse:
+    def raise_for_status(self) -> None:
+        return None
 
 
 class _FakeResponse:
-    """Shape of slack_sdk's SlackResponse — we only need `.data`."""
+    """Shape of slack_sdk's SlackResponse — supports both `.data` and dict-like get()."""
 
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.data[key]
 
 
 @pytest.fixture
@@ -291,8 +328,14 @@ def test_bot_constructor_accepts_injected_clients() -> None:
 # ----- slash command handling end-to-end -----
 
 
-def _make_bot_with_db(db_path) -> tuple[slack_bot.VerbatimSlackBot, FakeWebClient]:
-    fake_web = FakeWebClient()
+def _make_bot_with_db(
+    db_path,
+    *,
+    web_fails: bool = False,
+    http_fails: bool = False,
+) -> tuple[slack_bot.VerbatimSlackBot, FakeWebClient, FakeHttpClient]:
+    fake_web = FakeWebClient(ephemeral_should_fail=web_fails)
+    fake_http = FakeHttpClient(should_fail=http_fails)
 
     class FakeSocket:
         socket_mode_request_listeners: list = []
@@ -300,42 +343,84 @@ def _make_bot_with_db(db_path) -> tuple[slack_bot.VerbatimSlackBot, FakeWebClien
     bot = slack_bot.VerbatimSlackBot(
         bot_token="xoxb-x", app_token="",
         web_client=fake_web, socket_client=FakeSocket(),
+        http_client=fake_http,
         db_path=db_path,
     )
-    return bot, fake_web
+    return bot, fake_web, fake_http
 
 
-def test_handle_slash_command_posts_ephemeral(tmp_db_path, seeded_conn) -> None:
+def test_handle_slash_command_uses_response_url_by_default(tmp_db_path, seeded_conn) -> None:
     seeded_conn.close()  # close fixture connection so the bot can open its own
-    bot, fake_web = _make_bot_with_db(tmp_db_path)
+    bot, fake_web, fake_http = _make_bot_with_db(tmp_db_path)
     bot._handle_slash_command({
         "text": "commitments",
         "user_id": "U001",
         "channel_id": "C001",
+        "response_url": "https://hooks.slack.com/commands/T01/x/y",
     })
-    assert len(fake_web.ephemerals) == 1
-    e = fake_web.ephemerals[0]
-    assert e["channel"] == "C001"
-    assert e["user"] == "U001"
-    assert "Qat" in e["text"]
+    # response_url path used — no Web API calls needed
+    assert len(fake_http.posts) == 1
+    post = fake_http.posts[0]
+    assert post["url"] == "https://hooks.slack.com/commands/T01/x/y"
+    assert post["json"]["response_type"] == "ephemeral"
+    assert "Qat" in post["json"]["text"]
+    # Web API not touched
+    assert fake_web.ephemerals == []
+    assert fake_web.posts == []
 
 
-def test_handle_slash_command_falls_back_to_in_channel_post(tmp_db_path, seeded_conn) -> None:
+def test_response_url_failure_falls_back_to_ephemeral(tmp_db_path, seeded_conn) -> None:
     seeded_conn.close()
-    bot, fake_web = _make_bot_with_db(tmp_db_path)
+    bot, fake_web, fake_http = _make_bot_with_db(tmp_db_path, http_fails=True)
+    bot._handle_slash_command({
+        "text": "commitments",
+        "user_id": "U001",
+        "channel_id": "C001",
+        "response_url": "https://hooks.slack.com/commands/T01/x/y",
+    })
+    # http failed → ephemeral attempt → success
+    assert len(fake_http.posts) == 1
+    assert len(fake_web.ephemerals) == 1
+    assert fake_web.ephemerals[0]["channel"] == "C001"
+
+
+def test_ephemeral_failure_falls_back_to_dm(tmp_db_path, seeded_conn) -> None:
+    """If both response_url and chat.postEphemeral fail (not_in_channel etc.),
+    the bot should DM the user as a last-ditch reply path."""
+    seeded_conn.close()
+    bot, fake_web, fake_http = _make_bot_with_db(tmp_db_path, http_fails=True, web_fails=True)
+    bot._handle_slash_command({
+        "text": "commitments",
+        "user_id": "U001",
+        "channel_id": "C001",
+        "response_url": "https://hooks.slack.com/commands/T01/x/y",
+    })
+    # DM was opened
+    assert len(fake_web.dm_opens) == 1
+    assert fake_web.dm_opens[0]["users"] == "U001"
+    # Message posted to the DM channel
+    dm_posts = [p for p in fake_web.posts if p["channel"].startswith("D-")]
+    assert len(dm_posts) == 1
+
+
+def test_handle_slash_command_no_response_url_falls_through_to_web(tmp_db_path, seeded_conn) -> None:
+    """Payloads without response_url (rare) should still work via Web API."""
+    seeded_conn.close()
+    bot, fake_web, fake_http = _make_bot_with_db(tmp_db_path)
     bot._handle_slash_command({
         "text": "stats",
         "channel_id": "C001",
-        # no user_id
+        # no response_url, no user_id
     })
+    assert fake_http.posts == []
     assert len(fake_web.posts) == 1
     assert fake_web.posts[0]["channel"] == "C001"
-    assert "sessions" in fake_web.posts[0]["text"]
 
 
 def test_handle_slash_command_no_channel_is_noop(tmp_db_path) -> None:
-    bot, fake_web = _make_bot_with_db(tmp_db_path)
+    bot, fake_web, fake_http = _make_bot_with_db(tmp_db_path)
     bot._handle_slash_command({"text": "stats"})
+    assert fake_http.posts == []
     assert fake_web.posts == []
     assert fake_web.ephemerals == []
 
@@ -345,7 +430,7 @@ def test_handle_slash_command_no_channel_is_noop(tmp_db_path) -> None:
 
 def test_post_digest_includes_stats_and_recent_items(tmp_db_path, seeded_conn) -> None:
     seeded_conn.close()
-    bot, fake_web = _make_bot_with_db(tmp_db_path)
+    bot, fake_web, _ = _make_bot_with_db(tmp_db_path)
     bot.post_digest("C001")
     assert len(fake_web.posts) == 1
     text = fake_web.posts[0]["text"]
@@ -355,7 +440,7 @@ def test_post_digest_includes_stats_and_recent_items(tmp_db_path, seeded_conn) -
 
 
 def test_post_digest_empty_state(tmp_db_path) -> None:
-    bot, fake_web = _make_bot_with_db(tmp_db_path)
+    bot, fake_web, _ = _make_bot_with_db(tmp_db_path)
     bot.post_digest("C001")
     text = fake_web.posts[0]["text"]
     assert "0 open commitments" in text

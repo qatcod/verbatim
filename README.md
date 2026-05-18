@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.5.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, **Slack bot with slash commands + digest** (consumer-facing — no terminal required for non-technical users), calibrated prompt, 158-test pytest suite, CI.
+**Status:** v0.6.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, Slack bot with slash commands + digest, **web UI (`verbatim serve`)**, **email digest (`verbatim digest email`)**, calibrated prompt, 189-test pytest suite, CI.
 
 ---
 
@@ -223,6 +223,32 @@ verbatim slack-bot digest \#engineering      # one-shot summary post
 
 Replies are ephemeral (only the invoker sees them) so channels stay quiet. Use `verbatim slack-bot digest <channel>` for explicit shared digests.
 
+### Browse state in a browser — `verbatim serve`
+
+Read-mostly web UI for non-technical browsing of the state graph.
+
+```bash
+verbatim serve                        # http://127.0.0.1:8765
+verbatim serve --host 0.0.0.0 --port 8080
+```
+
+Routes: dashboard, commitments, decisions, open-questions, blockers, sessions, projections, and `/entity/<id>` with all merged source quotes. Each list page has inline filters (actor / owner / raised_by / min_confidence / show-merged-siblings-separately).
+
+**Local-only by default.** The UI is read-only in v0.6 and binds to `127.0.0.1`. Multi-user with SSO / token auth is the v0.7 story; for now treat this as a local browser tool you point your colleagues at when they're on the same network or a tunneled session.
+
+### Email a digest — `verbatim digest email`
+
+For people who live in email more than Slack — execs, CFOs, anyone who wants a Monday-morning weekly summary.
+
+```bash
+export SMTP_HOST=smtp.gmail.com
+export SMTP_USER=bot@example.com
+export SMTP_PASSWORD=...
+verbatim digest email --to qat@example.com --to jason@example.com
+```
+
+Renders the same content as the Slack `digest` (stats + recent commitments + open blockers + open questions) into multipart MIME — both plain text and HTML. STARTTLS by default; `--ssl` for SMTPS. SMTP works across every provider (Gmail SMTP, SES SMTP interface, SendGrid SMTP, Postmark SMTP, your own mailserver). Drop into cron for recurring digests.
+
 ### Wire MCP into Claude Code
 
 Add to your Claude Code config (`~/.claude/settings.json` or workspace settings):
@@ -284,9 +310,9 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 | **v0.3.0** ✅ | Live Slack Web API connector (`ingest-slack-api`) + GitHub PR connector (`ingest-github`). Shared Slack primitives in `slack_common`. |
 | **v0.4.0** ✅ | Cross-session reconciliation with `canonical_id`/`merged_at`, rapidfuzz matcher, `reconcile`/`link`/`unlink`/`show` commands, folded-by-default queries. Linear projection with idempotent issue creation, user resolution, verbatim-quote-bearing descriptions. |
 | **v0.4.1** ✅ | `--auto-reconcile` flags on every ingest command so continuous-ingest paths merge in real time. |
-| **v0.5.0** ✅ (current) | **Slack bot** with Socket Mode (no public URL) — `/verbatim` slash commands for non-technical users, ephemeral replies, digest posting. The consumer-facing surface. 31 new tests. |
-| **v0.6** | Read-mostly web view (`verbatim serve`). Web UI for browsing state, walking merged groups, manual link/unlink. |
-| **v1** | LLM-assisted reconciliation for borderline cases. Linear → Verbatim sync-back. Email digest. Hosted-SaaS deployment path. |
+| **v0.5.0** ✅ | Slack bot with Socket Mode (no public URL) — `/verbatim` slash commands for non-technical users, ephemeral replies, digest posting. |
+| **v0.6.0** ✅ (current) | Read-mostly web UI (`verbatim serve`). Email digest (`verbatim digest email`) over SMTP. Slack bot `not_in_channel` fix — now uses `response_url` so `/verbatim` works in any channel. 29 new tests. |
+| **v1** | LLM-assisted reconciliation. Linear → Verbatim sync-back. Auth + mutating web endpoints. Hosted-SaaS deployment path. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 
