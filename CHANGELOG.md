@@ -2,6 +2,26 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-05-18
+
+### Added
+- **Slack Web API connector** (`slack_api.py`) — pull live messages from a Slack workspace via OAuth token. Same `SlackUnit` output as the export connector, so it flows through the existing pipeline unchanged. Uses `slack_sdk.WebClient`; handles pagination, thread expansion via `conversations.replies`, in-process user cache.
+- **`verbatim ingest-slack-api`** CLI command with `--token` (or `$SLACK_TOKEN` env), `--channel`, `--since/--until`, `--min-thread-messages`, `--include-loose`, `--include-private`, `--limit`, `--dry-run`, `--request-pause` for rate-limit-aware pacing.
+- **GitHub PR connector** (`github_pr.py`) — pull a repo's pull request discussion threads (PR body + issue comments + review comments) as extraction units. Uses raw `httpx` against the GitHub REST API; no `gh` CLI shell-out, no PyGithub dep.
+- **`verbatim ingest-github`** CLI command with `--token` (or `$GITHUB_TOKEN` env), `--pr` (specific PRs), `--state` (open/closed/all), `--since/--until` (date window), `--limit`, `--dry-run`.
+- Shared Slack ingestion primitives extracted to `connectors/slack_common.py` — both export and API connectors now build SlackUnits via one builder function. Existing `slack_export` API preserved via re-exports; no test changes required for the refactor.
+- New `_run_unit_ingest` CLI helper — generic ingest loop usable for any unit type with `.transcript`/`.source_label`/`.source_kind`. GitHub PR units use it directly.
+- 20 new tests (11 slack_api with mocked WebClient, 9 github_pr with mocked httpx); suite now 85 tests, all green.
+
+### Dependencies
+- `slack-sdk >= 3.27.0` (live Slack Web API)
+- `httpx >= 0.27.0` (GitHub REST + test transport)
+
+### Design notes
+- Slack Web API connector and Slack export connector now share the same SlackUnit / thread-building / transcript-rendering code. The two differ only in *where the raw messages come from*.
+- GitHub PR units have a parallel `.transcript`/`.source_label`/`.source_kind` shape so the same ingest pipeline works for any future connector that conforms.
+- v1 wedge: token-based auth, no hosted OAuth flow. Self-hosted users create their own Slack App / GitHub PAT — they keep the token, we never see it. Hosted OAuth becomes a v1.x add when there's a hosted Verbatim to OAuth against.
+
 ## [0.2.0] — 2026-05-18
 
 ### Added

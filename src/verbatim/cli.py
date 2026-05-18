@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -19,7 +20,7 @@ from rich.progress import (
 from rich.table import Table
 
 from . import __version__, state, store
-from .connectors import slack_export
+from .connectors import github_pr, slack_api, slack_export
 from .extractor import DEFAULT_MODEL, extract
 from .renderers import to_json, to_markdown
 from .transcripts import load_transcript
@@ -322,6 +323,276 @@ def _parse_iso_date(value: str | None, field_name: str) -> datetime | None:
     except ValueError:
         err_console.print(f"[red]{field_name} must be YYYY-MM-DD, got: {value}[/red]")
         raise typer.Exit(code=2) from None
+
+
+# ----------------------- ingest-slack-api (live Slack workspace) -----------------------
+
+
+@app.command(name="ingest-slack-api")
+def ingest_slack_api_cmd(
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        envvar="SLACK_TOKEN",
+        help="Slack OAuth token (xoxb-... or xoxp-...). Reads $SLACK_TOKEN if not passed.",
+    ),
+    channel: list[str] | None = typer.Option(
+        None,
+        "--channel",
+        "-c",
+        help="Restrict to specific channels (repeatable). Default: all accessible channels.",
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Only include messages after this ISO date (YYYY-MM-DD).",
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Only include messages before this ISO date (YYYY-MM-DD).",
+    ),
+    min_thread_messages: int = typer.Option(
+        3, "--min-thread-messages", help="Skip threads with fewer than this many messages.",
+    ),
+    include_loose: bool = typer.Option(
+        False, "--include-loose",
+        help="Also extract channel-day rollups of non-threaded messages.",
+    ),
+    include_private: bool = typer.Option(
+        False, "--include-private",
+        help="Include private channels the token has access to.",
+    ),
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Stop after this many units."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, no API calls to Claude."),
+    request_pause: float = typer.Option(
+        0.0, "--request-pause",
+        help="Pause N seconds between Slack API calls to avoid rate limits.",
+    ),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Ingest a live Slack workspace via the Web API.
+
+    Requires a Slack App OAuth token (see slack_api.py docstring for setup).
+    """
+    if not token:
+        err_console.print(
+            "[red]Slack token required.[/red] Set $SLACK_TOKEN or pass --token. "
+            "See: https://api.slack.com/apps"
+        )
+        raise typer.Exit(code=2)
+
+    since_dt = _parse_iso_date(since, "--since")
+    until_dt = _parse_iso_date(until, "--until")
+
+    try:
+        client = slack_api.SlackClient(token=token, request_pause=request_pause)
+    except ValueError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from None
+
+    err_console.print("[dim]Pulling user map + channel list from Slack…[/dim]")
+    try:
+        users = client.get_users()
+        channels_available = client.list_channel_names(include_private=include_private)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Slack API call failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    err_console.print(
+        f"[dim]{len(users)} users · {len(channels_available)} channels accessible[/dim]"
+    )
+    if channel:
+        unknown = [c for c in channel if c not in channels_available]
+        if unknown:
+            err_console.print(
+                f"[yellow]warn:[/yellow] not accessible / not in channel list: "
+                f"{', '.join(unknown)}"
+            )
+
+    err_console.print("[dim]Fetching messages…[/dim]")
+    try:
+        units = list(
+            client.iter_units(
+                channels=channel,
+                since=since_dt,
+                until=until_dt,
+                min_thread_messages=min_thread_messages,
+                include_loose_messages=include_loose,
+                include_private=include_private,
+            )
+        )
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Slack API call failed during message fetch: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    if limit is not None:
+        units = units[:limit]
+
+    if not units:
+        err_console.print("[yellow]No units matched the filters.[/yellow]")
+        return
+
+    if dry_run:
+        _print_slack_dry_run(units)
+        return
+
+    _run_slack_ingest(units, model=model, db=db)
+
+
+# ----------------------- ingest-github (GitHub PR discussions) -----------------------
+
+
+@app.command(name="ingest-github")
+def ingest_github_cmd(
+    repo: str = typer.Argument(
+        ..., help="Repository in owner/name form (e.g. qatcod/verbatim)."
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        envvar="GITHUB_TOKEN",
+        help="GitHub PAT. Reads $GITHUB_TOKEN if not passed.",
+    ),
+    pr: list[int] | None = typer.Option(
+        None,
+        "--pr",
+        help="Specific PR numbers to ingest (repeatable). If not given, list by state/date.",
+    ),
+    state: str = typer.Option(
+        "all", "--state",
+        help="PR state filter: open | closed | all. Only used if --pr not given.",
+    ),
+    since: str | None = typer.Option(
+        None, "--since",
+        help="Only PRs updated after this date (YYYY-MM-DD). Only used if --pr not given.",
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Only PRs updated before this date (YYYY-MM-DD).",
+    ),
+    limit: int | None = typer.Option(None, "--limit", "-n"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Ingest GitHub PR discussion threads.
+
+    Pulls each PR's body plus all issue and review comments, sorts chronologically,
+    and treats the whole thread as one extraction session.
+    """
+    if not token:
+        err_console.print(
+            "[red]GitHub token required.[/red] Set $GITHUB_TOKEN or pass --token."
+        )
+        raise typer.Exit(code=2)
+    if "/" not in repo:
+        err_console.print(f"[red]Repo must be owner/name form, got: {repo}[/red]")
+        raise typer.Exit(code=2)
+    if state not in {"open", "closed", "all"}:
+        err_console.print(f"[red]--state must be open|closed|all, got: {state}[/red]")
+        raise typer.Exit(code=2)
+
+    since_dt = _parse_iso_date(since, "--since")
+    until_dt = _parse_iso_date(until, "--until")
+
+    units: list = []
+    try:
+        with github_pr.GitHubClient(token=token) as gh:
+            err_console.print(f"[dim]Fetching PRs from {repo}…[/dim]")
+            for unit in gh.iter_pull_requests(
+                repo, state=state, since=since_dt, until=until_dt, numbers=pr,
+            ):
+                units.append(unit)
+                if limit is not None and len(units) >= limit:
+                    break
+    except httpx.HTTPStatusError as e:
+        err_console.print(f"[red]GitHub API error: {e.response.status_code} {e.response.text[:200]}[/red]")
+        raise typer.Exit(code=1) from None
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]GitHub fetch failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    if not units:
+        err_console.print("[yellow]No PRs matched the filters.[/yellow]")
+        return
+
+    if dry_run:
+        _print_github_dry_run(units)
+        return
+
+    _run_unit_ingest(units, model=model, db=db, source_kind_default="github_pr")
+
+
+def _print_github_dry_run(units: list) -> None:
+    table = Table(show_header=True, header_style="bold cyan", title="GitHub PR ingest plan (dry run)")
+    table.add_column("repo")
+    table.add_column("PR", justify="right")
+    table.add_column("title")
+    table.add_column("state")
+    table.add_column("comments", justify="right")
+    for u in units:
+        table.add_row(
+            u.repo,
+            f"#{u.number}",
+            u.title[:60] + ("…" if len(u.title) > 60 else ""),
+            u.state,
+            str(len(u.comments)),
+        )
+    console.print(table)
+    err_console.print(
+        f"[dim]{len(units)} PRs would be extracted. "
+        f"Estimated cost at Sonnet pricing: ~${len(units) * 0.07:.2f}[/dim]"
+    )
+
+
+def _run_unit_ingest(units: list, *, model: str | None, db: Path | None, source_kind_default: str) -> None:
+    """Generic ingest loop usable for any unit type with .transcript / .source_label / .source_kind."""
+    conn = state.open_db(db)
+    total_counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
+    failed = 0
+    total_in_tokens = 0
+    total_out_tokens = 0
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=err_console,
+    )
+
+    try:
+        with progress:
+            task = progress.add_task(f"Extracting {len(units)} units", total=len(units))
+            for unit in units:
+                progress.update(task, description=unit.source_label[:60])
+                try:
+                    result, diag = extract(unit.transcript, model=model)
+                    summary = state.save_extraction(
+                        conn, result, diag,
+                        source_path=unit.source_label,
+                        source_kind=getattr(unit, "source_kind", source_kind_default),
+                    )
+                    for k, v in summary.counts.items():
+                        total_counts[k] += v
+                    total_in_tokens += diag.input_tokens
+                    total_out_tokens += diag.output_tokens
+                except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
+                progress.advance(task)
+    finally:
+        conn.close()
+
+    total = sum(total_counts.values())
+    body = (
+        f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
+        f"{total_counts['commitment']} commitments · "
+        f"{total_counts['decision']} decisions · "
+        f"{total_counts['open_question']} open questions · "
+        f"{total_counts['blocker']} blockers\n"
+        f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
+        f"failed: {failed}[/dim]"
+    )
+    err_console.print(Panel(body, title="ingest complete", border_style="green", expand=False))
 
 
 # ----------------------- query subcommands -----------------------

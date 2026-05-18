@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.2.0 — CLI extraction, SQLite state graph, MCP server, **Slack workspace export ingestion**, calibrated prompt, 65-test pytest suite, CI. GitHub PR / Linear projection on the v1 roadmap.
+**Status:** v0.3.0 — CLI extraction, SQLite state graph, MCP server, **live Slack workspace ingestion + Slack export + GitHub PR threads**, calibrated prompt, 85-test pytest suite, CI. Cross-session reconciliation + Linear projection on the v1 roadmap.
 
 ---
 
@@ -83,6 +83,44 @@ Useful flags:
 
 Get a Slack export from `Slack admin → Settings → Import/Export Data → Export`. No OAuth, no app, no scopes — the file is yours already.
 
+### Ingest a *live* Slack workspace (Web API)
+
+If you can't always export, use the live connector instead. One-time setup: create a Slack App and get a token.
+
+```bash
+export SLACK_TOKEN=xoxb-...   # or xoxp-...
+verbatim ingest-slack-api --channel engineering --since 2026-05-01 --dry-run
+verbatim ingest-slack-api --channel engineering --since 2026-05-01
+```
+
+**Slack App setup (one-time):**
+1. https://api.slack.com/apps → *Create New App* → *From scratch*. Pick a name and your workspace.
+2. *OAuth & Permissions* → add Bot Token scopes:
+   - `channels:history` (read public channel messages)
+   - `channels:read` (list public channels)
+   - `users:read` (resolve user IDs to names)
+   - Optionally: `groups:history`, `im:history`, `mpim:history` for private channels/DMs.
+3. Install the App to your workspace. Copy the *Bot User OAuth Token* (`xoxb-...`).
+4. `/invite @YourBotName` into any public channel you want it to read.
+
+For a User token (sees everything you see, including private DMs you're in), use *User Token Scopes* instead with the same names. Install/Reinstall the App and copy the *User OAuth Token* (`xoxp-...`).
+
+Flags are the same as `ingest-slack` plus `--include-private`, `--request-pause` (seconds between Slack API calls if you hit rate limits).
+
+### Ingest GitHub PR discussions
+
+Most engineering decisions and commitments live in PR review threads. The GitHub connector pulls a PR's body, issue comments, and review comments (with file/line context), and treats each PR as one extraction unit.
+
+```bash
+export GITHUB_TOKEN=ghp_...
+# specific PR(s)
+verbatim ingest-github qatcod/verbatim --pr 42 --pr 43
+# all PRs updated since a date
+verbatim ingest-github qatcod/verbatim --state all --since 2026-05-01 --dry-run
+```
+
+PAT needs `repo` scope (or `public_repo` for public-only). Fine-grained tokens need Read on "Pull requests" and "Issues" for the target repos.
+
 ### Query accumulated state
 
 ```bash
@@ -154,8 +192,9 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 |---|---|
 | **v0.1.0** ✅ | CLI extraction. Confidence + source quoting. JSON + Markdown out. SQLite state graph. `ingest` / `query` / `resolve` CLI. MCP server. |
 | **v0.1.1** ✅ | Prompt calibration tweaks. 42-test pytest suite. GitHub Actions CI. Contribution guide. |
-| **v0.2.0** ✅ (current) | Slack workspace export connector. `ingest-slack` CLI with channel/date/length/limit/dry-run filters. 23 new tests. |
-| **v1** | GitHub PR comment connector. Cross-session reconciliation. Linear projection. Web UI. |
+| **v0.2.0** ✅ | Slack workspace export connector. `ingest-slack` CLI with channel/date/length/limit/dry-run filters. |
+| **v0.3.0** ✅ (current) | Live Slack Web API connector (`ingest-slack-api`) + GitHub PR connector (`ingest-github`). Shared Slack primitives in `slack_common`. 20 new tests. |
+| **v1** | Cross-session reconciliation (same commitment from a meeting AND a Slack thread → one entity). Linear projection. Web UI. |
 | **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 

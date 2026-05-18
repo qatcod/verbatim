@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "verbatim"
-version = "0.2.0"
+version = "0.3.0"
 description = "The AI memory layer for engineering teams. Extracts structured commitments, decisions, open questions, and blockers from meeting transcripts — every extraction sourced to a verbatim quote."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,8 @@ dependencies = [
     "pydantic>=2.6.0",
     "rich>=13.0.0",
     "mcp>=1.0.0",
+    "slack-sdk>=3.27.0",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]

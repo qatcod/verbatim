@@ -1,0 +1,261 @@
+"""Slack Web API connector — pull live messages from a workspace.
+
+The export connector handles one-time historical backfill from a downloaded ZIP.
+This connector pulls live, repeatedly, from a Slack App's OAuth token. The
+output is identical (SlackUnit objects); only the source changes.
+
+# Setting up a Slack App
+
+You need a token (a bot token, `xoxb-...`, or a user token, `xoxp-...`):
+
+1. https://api.slack.com/apps → Create New App → From scratch
+2. Pick a name and the workspace
+3. OAuth & Permissions → add Bot Token Scopes:
+     channels:history     (read messages in public channels the bot's in)
+     channels:read        (list public channels)
+     users:read           (resolve user IDs to names)
+   Optional:
+     groups:history       (private channels the bot is in)
+     im:history           (DMs to the bot)
+     mpim:history         (group DMs the bot is in)
+4. Install the App to your workspace
+5. Copy the "Bot User OAuth Token" — that's the value to set as
+   $SLACK_TOKEN or pass via --token.
+6. Invite the bot into any public channel you want it to read:
+     /invite @YourBotName
+
+For a User token (sees everything *you* see, including private DMs):
+   - OAuth & Permissions → User Token Scopes:
+       channels:history, groups:history, im:history, mpim:history, users:read
+   - Install/Reinstall the App
+   - Copy the "User OAuth Token" instead.
+
+# Rate limits
+
+`conversations.history` and `conversations.replies` are tier-3 endpoints — Slack
+allows ~50 calls per minute per workspace. The slack_sdk client raises
+SlackApiError on 429; we let it bubble up and surface the cause to the CLI.
+"""
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+from datetime import datetime
+from typing import Any
+
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+from .slack_common import (
+    SlackMessage,
+    SlackUnit,
+    build_units_from_messages,
+    build_user_map,
+    parse_message,
+)
+
+
+class SlackClient:
+    """A thin wrapper around slack_sdk.WebClient that yields SlackUnits.
+
+    Stateless except for an in-process user cache. Safe to construct fresh
+    per CLI invocation.
+    """
+
+    def __init__(self, token: str, *, request_pause: float = 0.0) -> None:
+        if not token:
+            raise ValueError("Slack token is required (set SLACK_TOKEN or pass --token).")
+        self._client = WebClient(token=token)
+        self._users_cache: dict[str, str] | None = None
+        self._request_pause = request_pause
+
+    # ----- discovery -----
+
+    def get_users(self) -> dict[str, str]:
+        """Fetch and cache user_id → display name for the workspace."""
+        if self._users_cache is not None:
+            return self._users_cache
+
+        users_raw: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self._client.users_list(**params)
+            users_raw.extend(resp.get("members") or [])
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                break
+            self._maybe_pause()
+
+        self._users_cache = build_user_map(users_raw)
+        return self._users_cache
+
+    def list_channel_names(self, *, include_private: bool = False) -> list[str]:
+        """All channels the token has access to (public; private if requested)."""
+        types = "public_channel"
+        if include_private:
+            types += ",private_channel"
+
+        names: list[str] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"types": types, "limit": 200, "exclude_archived": True}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self._client.conversations_list(**params)
+            for ch in resp.get("channels") or []:
+                name = ch.get("name")
+                if name:
+                    names.append(name)
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                break
+            self._maybe_pause()
+        return sorted(names)
+
+    def _resolve_channel_id(self, name: str, *, include_private: bool = False) -> str | None:
+        """Map a channel name to a channel ID (Slack API needs IDs, not names)."""
+        types = "public_channel"
+        if include_private:
+            types += ",private_channel"
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"types": types, "limit": 200, "exclude_archived": True}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self._client.conversations_list(**params)
+            for ch in resp.get("channels") or []:
+                if ch.get("name") == name:
+                    return ch.get("id")
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                break
+            self._maybe_pause()
+        return None
+
+    # ----- message fetching -----
+
+    def iter_messages(
+        self,
+        channel_name: str,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        include_private: bool = False,
+    ) -> Iterator[SlackMessage]:
+        """Yield messages from a channel, including thread replies, in time order.
+
+        Pulls top-level history first, then expands threads via conversations.replies.
+        """
+        channel_id = self._resolve_channel_id(channel_name, include_private=include_private)
+        if channel_id is None:
+            raise SlackApiError(
+                f"Channel not found or not accessible: #{channel_name}",
+                response={"error": "channel_not_found"},
+            )
+
+        oldest = f"{since.timestamp():.6f}" if since else "0"
+        latest = f"{until.timestamp():.6f}" if until else None
+
+        # Collect top-level messages with pagination.
+        top_level: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "channel": channel_id,
+                "oldest": oldest,
+                "limit": 200,
+            }
+            if latest:
+                params["latest"] = latest
+            if cursor:
+                params["cursor"] = cursor
+            resp = self._client.conversations_history(**params)
+            top_level.extend(resp.get("messages") or [])
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                break
+            self._maybe_pause()
+
+        # Expand threads: for any parent with replies, fetch them.
+        for raw in top_level:
+            parsed = parse_message(raw)
+            if parsed is not None:
+                yield parsed
+            reply_count = int(raw.get("reply_count", 0) or 0)
+            thread_ts = raw.get("thread_ts")
+            ts = raw.get("ts")
+            # A thread parent has thread_ts == ts. Replies have reply_count==0 and
+            # thread_ts!=ts. We only need to fetch replies for parents (avoids dupes).
+            if reply_count > 0 and thread_ts == ts:
+                yield from self._iter_thread_replies(channel_id, str(ts))
+
+    def _iter_thread_replies(self, channel_id: str, parent_ts: str) -> Iterator[SlackMessage]:
+        cursor: str | None = None
+        first_call = True
+        while True:
+            params: dict[str, Any] = {"channel": channel_id, "ts": parent_ts, "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            resp = self._client.conversations_replies(**params)
+            for raw in resp.get("messages") or []:
+                # The first message in the replies response is the parent — skip on
+                # the first call so we don't double-yield it (we already yielded
+                # it from conversations.history).
+                if first_call and str(raw.get("ts")) == parent_ts:
+                    continue
+                parsed = parse_message(raw)
+                if parsed is not None:
+                    yield parsed
+            first_call = False
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                break
+            self._maybe_pause()
+
+    # ----- unit-level convenience -----
+
+    def iter_units(
+        self,
+        *,
+        channels: list[str] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        min_thread_messages: int = 3,
+        include_loose_messages: bool = False,
+        include_private: bool = False,
+    ) -> Iterator[SlackUnit]:
+        """Live equivalent of SlackExport.iter_units. Pulls user map once, then
+        walks each requested channel and emits SlackUnit objects from the same
+        shared builder used by the export connector.
+        """
+        users = self.get_users()
+        chans = channels if channels else self.list_channel_names(include_private=include_private)
+        for channel in chans:
+            messages = list(
+                self.iter_messages(
+                    channel,
+                    since=since,
+                    until=until,
+                    include_private=include_private,
+                )
+            )
+            if not messages:
+                continue
+            yield from build_units_from_messages(
+                channel=channel,
+                messages=messages,
+                user_map=users,
+                min_thread_messages=min_thread_messages,
+                include_loose_messages=include_loose_messages,
+                since=since,
+                until=until,
+            )
+
+    # ----- internals -----
+
+    def _maybe_pause(self) -> None:
+        if self._request_pause > 0:
+            time.sleep(self._request_pause)
