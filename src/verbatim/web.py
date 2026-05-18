@@ -56,97 +56,436 @@ def _open_conn() -> sqlite3.Connection:
 # ----------------------- HTML shell -----------------------
 
 
+# Inline SVG icons — no external icon font, no CDN. Keep these terse; they
+# render at 18×18 by default and inherit `currentColor`.
+_ICONS: dict[str, str] = {
+    "dashboard": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<rect x="3" y="3" width="7" height="9" rx="1"/>'
+        '<rect x="14" y="3" width="7" height="5" rx="1"/>'
+        '<rect x="14" y="12" width="7" height="9" rx="1"/>'
+        '<rect x="3" y="16" width="7" height="5" rx="1"/></svg>'
+    ),
+    "commitments": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M9 11l3 3L22 4"/>'
+        '<path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>'
+    ),
+    "decisions": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>'
+    ),
+    "questions": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="10"/>'
+        '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
+        '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+    ),
+    "blockers": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="10"/>'
+        '<line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>'
+    ),
+    "sessions": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
+    ),
+    "projections": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M5 12h14"/><polyline points="12 5 19 12 12 19"/></svg>'
+    ),
+    "external": (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'
+        '<polyline points="15 3 21 3 21 9"/>'
+        '<line x1="10" y1="14" x2="21" y2="3"/></svg>'
+    ),
+    "logo": (
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h6"/>'
+        '<circle cx="19" cy="17" r="3" fill="currentColor" stroke="none"/></svg>'
+    ),
+}
+
+
 _NAV_LINKS = [
-    ("/", "Dashboard"),
-    ("/commitments", "Commitments"),
-    ("/decisions", "Decisions"),
-    ("/open-questions", "Questions"),
-    ("/blockers", "Blockers"),
-    ("/sessions", "Sessions"),
-    ("/projections", "Projections"),
+    ("/", "Dashboard", "dashboard"),
+    ("/commitments", "Commitments", "commitments"),
+    ("/decisions", "Decisions", "decisions"),
+    ("/open-questions", "Questions", "questions"),
+    ("/blockers", "Blockers", "blockers"),
+    ("/sessions", "Sessions", "sessions"),
+    ("/projections", "Projections", "projections"),
 ]
 
 
 _CSS = """
+/* ── reset + theme tokens ───────────────────────────────────────────── */
 :root {
-  --bg: #fafafa;
-  --fg: #1a1a1a;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --accent: #2563eb;
-  --green: #16a34a;
-  --yellow: #ca8a04;
-  --red: #dc2626;
-  --card: #ffffff;
+  color-scheme: dark;
+  --bg: #0a0a0c;
+  --surface: #131316;
+  --surface-2: #1a1a1f;
+  --surface-3: #232329;
+  --border: #2a2a32;
+  --border-strong: #3a3a44;
+  --fg: #f4f4f5;
+  --fg-2: #c4c4c9;
+  --muted: #8b8b93;
+  --muted-2: #6b6b73;
+  --accent: #a78bfa;
+  --accent-2: #8b5cf6;
+  --accent-bg: rgba(139, 92, 246, 0.12);
+  --green: #34d399;
+  --green-bg: rgba(52, 211, 153, 0.12);
+  --yellow: #fbbf24;
+  --yellow-bg: rgba(251, 191, 36, 0.12);
+  --red: #f87171;
+  --red-bg: rgba(248, 113, 113, 0.12);
+  --shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.4);
+  --shadow-md: 0 8px 24px -8px rgba(0,0,0,0.6);
+  --radius: 10px;
+  --radius-sm: 6px;
 }
 * { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
 body {
-  margin: 0; padding: 0; background: var(--bg); color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139, 92, 246, 0.08), transparent),
+    var(--bg);
+  color: var(--fg);
+  font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
-header { background: var(--card); border-bottom: 1px solid var(--border); padding: 0 24px; }
-nav { display: flex; gap: 4px; flex-wrap: wrap; padding: 12px 0; }
-nav a {
-  color: var(--fg); text-decoration: none; padding: 6px 12px;
-  border-radius: 6px; font-size: 14px;
+::selection { background: var(--accent-bg); color: var(--accent); }
+
+/* ── layout: sidebar + main ─────────────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  min-height: 100vh;
 }
-nav a:hover { background: var(--bg); }
-nav a.active { background: var(--accent); color: #fff; }
-main { max-width: 1100px; margin: 32px auto; padding: 0 24px; }
-h1 { font-size: 24px; margin: 0 0 16px; font-weight: 600; }
-h2 { font-size: 18px; margin: 28px 0 12px; font-weight: 600; }
-table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
-th { background: var(--bg); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
-tr:last-child td { border-bottom: none; }
-tr:hover { background: #f9fafb; }
+aside.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 8px 20px; color: var(--accent);
+}
+.brand .name {
+  font-weight: 700; font-size: 16px; letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.brand .badge-version {
+  margin-left: auto; font-size: 10px; color: var(--muted);
+  border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+nav.side { display: flex; flex-direction: column; gap: 1px; }
+nav.side .group-label {
+  font-size: 11px; color: var(--muted-2); text-transform: uppercase;
+  letter-spacing: 0.08em; padding: 14px 10px 6px;
+}
+nav.side a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  color: var(--fg-2); text-decoration: none;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px; font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+nav.side a:hover { background: var(--surface-2); color: var(--fg); }
+nav.side a.active {
+  background: var(--accent-bg); color: var(--accent);
+}
+nav.side a.active svg { color: var(--accent); }
+nav.side a svg { color: var(--muted); flex-shrink: 0; }
+nav.side a:hover svg { color: var(--fg-2); }
+
+main {
+  padding: 32px 40px 80px;
+  max-width: 1280px;
+  width: 100%;
+}
+header.page {
+  margin-bottom: 24px;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+}
+header.page h1 {
+  font-size: 22px; font-weight: 600; margin: 0;
+  letter-spacing: -0.01em;
+}
+header.page .subtitle {
+  color: var(--muted); font-size: 13px; margin-left: 12px;
+}
+h2.section {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted);
+  margin: 32px 0 12px;
+}
+h2.section:first-child { margin-top: 0; }
+
+/* ── stat cards ─────────────────────────────────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px; margin-bottom: 24px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  position: relative;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.stat:hover { border-color: var(--border-strong); }
+.stat .stat-label {
+  color: var(--muted); font-size: 11.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  display: flex; align-items: center; gap: 6px;
+}
+.stat .stat-value {
+  font-size: 28px; font-weight: 600; margin-top: 6px;
+  letter-spacing: -0.02em; color: var(--fg);
+}
+.stat .stat-icon {
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--accent-bg); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+}
+.stat.muted .stat-icon { background: var(--surface-3); color: var(--muted); }
+
+/* ── cards (table replacements, content blocks) ─────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.card-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+}
+.card-header h3 {
+  margin: 0; font-size: 14px; font-weight: 600;
+}
+.card-header .count {
+  color: var(--muted); font-size: 13px;
+  background: var(--surface-3); padding: 2px 8px; border-radius: 9999px;
+}
+
+/* ── tables ─────────────────────────────────────────────────────────── */
+table {
+  width: 100%; border-collapse: collapse;
+}
+th, td {
+  padding: 12px 18px; text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px; vertical-align: middle;
+}
+th {
+  background: var(--surface-2);
+  font-weight: 500; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+tbody tr { transition: background 0.08s ease; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr:last-child td { border-bottom: none; }
+td.primary { color: var(--fg); font-weight: 500; }
+td.subtle { color: var(--muted); }
+
+/* ── links + buttons ────────────────────────────────────────────────── */
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
-.badge.high { background: #dcfce7; color: var(--green); }
-.badge.medium { background: #fef3c7; color: var(--yellow); }
-.badge.low { background: #fee2e2; color: var(--red); }
-.pill { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); margin-left: 6px; }
-.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted); }
-.muted { color: var(--muted); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 24px 0; }
-.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-.stat-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-.stat-card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
-.quote {
-  border-left: 3px solid var(--border); padding: 6px 0 6px 12px; margin: 8px 0;
-  color: var(--fg); font-size: 14px;
+a:hover { color: var(--accent-2); text-decoration: underline; text-underline-offset: 3px; }
+a.entity-ref {
+  font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;
+  color: var(--muted); padding: 2px 6px; border-radius: 4px;
+  background: var(--surface-3); border: 1px solid var(--border);
+  text-decoration: none; transition: all 0.12s ease;
 }
-.quote .speaker { font-weight: 600; }
-.quote .ts { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; margin-right: 6px; }
-.quote .rationale { color: var(--muted); font-size: 12px; font-style: italic; margin-top: 4px; }
-.entity-detail { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; }
-.entity-detail dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 16px 0; }
-.entity-detail dt { color: var(--muted); font-size: 13px; }
-.entity-detail dd { margin: 0; font-size: 14px; }
-.empty { text-align: center; padding: 48px; color: var(--muted); }
-form.inline { display: inline; }
-.filters { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; align-items: center; }
-.filters label { font-size: 13px; color: var(--muted); }
-.filters input, .filters select {
-  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
-  font-size: 13px; background: var(--card);
+a.entity-ref:hover {
+  color: var(--accent); border-color: var(--accent-bg);
+  background: var(--accent-bg); text-decoration: none;
+}
+
+/* ── badges + pills ─────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 9999px;
+  font-size: 11.5px; font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.badge.high { background: var(--green-bg); color: var(--green); }
+.badge.medium { background: var(--yellow-bg); color: var(--yellow); }
+.badge.low { background: var(--red-bg); color: var(--red); }
+.badge::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+}
+.pill {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; color: var(--muted);
+  background: var(--surface-3); border: 1px solid var(--border);
+  margin-left: 8px;
+}
+
+/* ── monospace + muted text ─────────────────────────────────────────── */
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+.muted { color: var(--muted); }
+.dim { color: var(--muted-2); }
+
+/* ── entity detail ──────────────────────────────────────────────────── */
+.entity-detail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+}
+.entity-detail .entity-meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.entity-detail dl {
+  display: grid; grid-template-columns: 150px 1fr; gap: 12px 24px;
+  margin: 20px 0; padding: 16px 20px;
+  background: var(--surface-2); border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.entity-detail dt {
+  color: var(--muted); font-size: 12.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.entity-detail dd { margin: 0; color: var(--fg); font-size: 14px; }
+
+/* ── quote blocks ───────────────────────────────────────────────────── */
+.quote {
+  position: relative;
+  padding: 14px 16px 14px 20px;
+  margin: 10px 0;
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 14px; color: var(--fg);
+}
+.quote .speaker {
+  font-weight: 600; color: var(--accent); margin-right: 4px;
+}
+.quote .ts {
+  display: inline-block; font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px; color: var(--muted); margin-right: 8px;
+  background: var(--surface-3); padding: 1px 6px; border-radius: 3px;
+}
+.quote .rationale {
+  margin-top: 8px; font-size: 12.5px; color: var(--muted);
+  font-style: italic;
+  padding-top: 8px; border-top: 1px dashed var(--border);
+}
+
+/* ── filters ────────────────────────────────────────────────────────── */
+.filters {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px; margin-bottom: 16px;
+}
+.filters label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--muted); font-weight: 500;
+}
+.filters input[type="text"], .filters select {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--fg);
+  font-family: inherit;
+  transition: border-color 0.12s ease;
+}
+.filters input[type="text"]:focus, .filters select:focus {
+  outline: none; border-color: var(--accent);
+}
+.filters input[type="checkbox"] {
+  accent-color: var(--accent);
 }
 .filters button {
-  padding: 6px 14px; background: var(--accent); color: #fff;
-  border: none; border-radius: 6px; cursor: pointer; font-size: 13px;
+  padding: 6px 16px;
+  background: var(--accent-2); color: #fff;
+  border: 1px solid var(--accent-2);
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.12s ease;
 }
-.filters button:hover { opacity: 0.9; }
+.filters button:hover { background: var(--accent); }
+
+/* ── empty states ───────────────────────────────────────────────────── */
+.empty {
+  text-align: center; padding: 64px 32px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+.empty .empty-title {
+  font-size: 16px; font-weight: 600; color: var(--fg-2);
+  margin-bottom: 8px;
+}
+.empty .empty-hint {
+  font-size: 13px; color: var(--muted); margin-bottom: 16px;
+}
+.empty code {
+  display: inline-block;
+  background: var(--surface-3); padding: 6px 12px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  font-family: ui-monospace, Menlo, monospace; font-size: 12.5px;
+  color: var(--accent); margin-top: 4px;
+}
+
+/* ── responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  aside.sidebar { position: static; height: auto; padding: 12px; }
+  nav.side { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  nav.side .group-label { display: none; }
+  nav.side a { padding: 6px 10px; }
+  main { padding: 20px 16px 60px; }
+  .entity-detail dl { grid-template-columns: 1fr; }
+}
 """
 
 
 def _shell(title: str, body: str, active: str = "") -> str:
-    nav_html = " ".join(
-        f'<a href="{html.escape(path)}"'
-        f' class="{"active" if path == active else ""}">{html.escape(label)}</a>'
-        for path, label in _NAV_LINKS
-    )
+    nav_items = []
+    for path, label, icon in _NAV_LINKS:
+        is_active = "active" if path == active else ""
+        icon_svg = _ICONS.get(icon, "")
+        nav_items.append(
+            f'<a href="{html.escape(path)}" class="{is_active}">'
+            f"{icon_svg}<span>{html.escape(label)}</span></a>"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -156,8 +495,22 @@ def _shell(title: str, body: str, active: str = "") -> str:
 <style>{_CSS}</style>
 </head>
 <body>
-<header><nav>{nav_html}</nav></header>
-<main>{body}</main>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      {_ICONS["logo"]}
+      <span class="name">Verbatim</span>
+      <span class="badge-version">v0.6</span>
+    </div>
+    <nav class="side">
+      <div class="group-label">State</div>
+      {"".join(nav_items[:5])}
+      <div class="group-label">Activity</div>
+      {"".join(nav_items[5:])}
+    </nav>
+  </aside>
+  <main>{body}</main>
+</div>
 </body>
 </html>"""
 
@@ -170,11 +523,27 @@ def _confidence_badge(conf: str) -> str:
 def _entity_link(entity_id: str, *, label: str | None = None) -> str:
     safe_id = html.escape(entity_id)
     text = html.escape(label or (entity_id[:8] + "…"))
-    return f'<a href="/entity/{safe_id}" class="mono">{text}</a>'
+    return f'<a href="/entity/{safe_id}" class="entity-ref">{text}</a>'
 
 
 def _maybe(value: Any) -> str:
-    return html.escape(str(value)) if value not in (None, "") else '<span class="muted">—</span>'
+    return html.escape(str(value)) if value not in (None, "") else '<span class="dim">—</span>'
+
+
+def _page_header(title: str, *, subtitle: str | None = None) -> str:
+    sub = f'<span class="subtitle">{html.escape(subtitle)}</span>' if subtitle else ""
+    return f'<header class="page"><h1>{html.escape(title)}{sub}</h1></header>'
+
+
+def _empty(title: str, hint: str, code: str | None = None) -> str:
+    code_block = f"<code>{html.escape(code)}</code>" if code else ""
+    return (
+        '<div class="empty">'
+        f'<div class="empty-title">{html.escape(title)}</div>'
+        f'<div class="empty-hint">{html.escape(hint)}</div>'
+        f"{code_block}"
+        "</div>"
+    )
 
 
 # ----------------------- routes -----------------------
@@ -186,47 +555,79 @@ async def home(request: Request) -> HTMLResponse:
         stats_dict = state.stats(conn)
         recent_sessions = state.recent_sessions(conn, limit=5)
         recent_commitments = state.list_commitments(conn, limit=5)
+        recent_blockers = state.list_blockers(conn, limit=3)
     finally:
         conn.close()
 
     stat_cards = [
-        ("Sessions", stats_dict.get("sessions", 0)),
-        ("Commitments", stats_dict.get("commitments_open", 0)),
-        ("Decisions", stats_dict.get("decisions_open", 0)),
-        ("Questions", stats_dict.get("open_questions_open", 0)),
-        ("Blockers", stats_dict.get("blockers_open", 0)),
-        ("Merged", stats_dict.get("entities_merged", 0)),
-        ("Projections", stats_dict.get("projections_active", 0)),
+        ("Sessions", stats_dict.get("sessions", 0), "sessions"),
+        ("Commitments", stats_dict.get("commitments_open", 0), "commitments"),
+        ("Decisions", stats_dict.get("decisions_open", 0), "decisions"),
+        ("Questions", stats_dict.get("open_questions_open", 0), "questions"),
+        ("Blockers", stats_dict.get("blockers_open", 0), "blockers"),
+        ("Merged", stats_dict.get("entities_merged", 0), None),
+        ("Projections", stats_dict.get("projections_active", 0), None),
     ]
     stats_html = "".join(
-        f'<div class="stat-card"><div class="label">{html.escape(label)}</div>'
-        f'<div class="value">{n}</div></div>'
-        for label, n in stat_cards
+        '<div class="stat{muted_cls}">'
+        f'<div class="stat-label">{html.escape(label)}</div>'
+        f'<div class="stat-value">{value}</div>'
+        f'<div class="stat-icon">{_ICONS.get(icon, "")}</div>'
+        "</div>".format(muted_cls=" muted" if not icon else "")
+        for label, value, icon in stat_cards
     )
 
     if recent_commitments:
         commits_rows = "".join(_render_commitment_row(c) for c in recent_commitments)
-        commits_html = f"""<h2>Recent commitments</h2>
-<table>
-<thead><tr><th>Actor</th><th>Deliverable</th><th>Deadline</th><th>Confidence</th><th>ID</th></tr></thead>
-<tbody>{commits_rows}</tbody></table>"""
+        commits_card = f"""
+<div class="card">
+  <div class="card-header">
+    <h3>Recent commitments</h3>
+    <span class="count">{len(recent_commitments)}</span>
+  </div>
+  <table>
+    <thead><tr><th>Actor</th><th>Deliverable</th><th>Deadline</th><th>Confidence</th><th>ID</th></tr></thead>
+    <tbody>{commits_rows}</tbody>
+  </table>
+</div>"""
     else:
-        commits_html = '<h2>Recent commitments</h2><div class="empty">No commitments yet — try <span class="mono">verbatim ingest</span>.</div>'
+        commits_card = _empty(
+            "No commitments yet",
+            "Ingest a transcript to extract structured commitments.",
+            "verbatim ingest path/to/meeting.txt",
+        )
 
+    blockers_block = ""
+    if recent_blockers:
+        blockers_rows = "".join(_render_blocker_row(b) for b in recent_blockers)
+        blockers_block = f"""
+<h2 class="section">Current blockers</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>Blocked thing</th><th>Blocked by</th><th>Owner</th><th>Confidence</th><th>ID</th></tr></thead>
+    <tbody>{blockers_rows}</tbody>
+  </table>
+</div>"""
+
+    sessions_block = ""
     if recent_sessions:
         session_rows = "".join(_render_session_row(s) for s in recent_sessions)
-        sessions_html = f"""<h2>Recent sessions</h2>
-<table>
-<thead><tr><th>When (UTC)</th><th>Source</th><th>Kind</th><th>Items</th></tr></thead>
-<tbody>{session_rows}</tbody></table>"""
-    else:
-        sessions_html = ""
+        sessions_block = f"""
+<h2 class="section">Recent sessions</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>When (UTC)</th><th>Source</th><th>Kind</th><th>Items</th></tr></thead>
+    <tbody>{session_rows}</tbody>
+  </table>
+</div>"""
 
     body = (
-        f'<h1>Verbatim dashboard</h1>'
-        f'<div class="stats">{stats_html}</div>'
-        f'{commits_html}'
-        f'{sessions_html}'
+        _page_header("Verbatim dashboard", subtitle="overview of your team's operational state")
+        + f'<div class="stat-grid">{stats_html}</div>'
+        + '<h2 class="section">Recent commitments</h2>'
+        + commits_card
+        + blockers_block
+        + sessions_block
     )
     return HTMLResponse(_shell("Dashboard", body, active="/"))
 
@@ -284,17 +685,19 @@ async def commitments(request: Request) -> HTMLResponse:
 
     if not items:
         body = (
-            f"<h1>Commitments</h1>{filters_form}"
-            '<div class="empty">No commitments match.</div>'
+            _page_header("Commitments")
+            + filters_form
+            + _empty("No commitments match", "Try removing the filters or broadening your time range.")
         )
     else:
         rows = "".join(_render_commitment_row(c) for c in items)
         body = (
-            f"<h1>Commitments <span class='muted'>({len(items)})</span></h1>"
-            f"{filters_form}"
-            f"<table><thead><tr><th>Actor</th><th>Deliverable</th>"
-            f"<th>Deadline</th><th>Confidence</th><th>ID</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            _page_header("Commitments", subtitle=f"{len(items)} item(s)")
+            + filters_form
+            + '<div class="card"><table>'
+            + "<thead><tr><th>Actor</th><th>Deliverable</th>"
+            + "<th>Deadline</th><th>Confidence</th><th>ID</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Commitments", body, active="/commitments"))
 
@@ -319,15 +722,20 @@ async def decisions(request: Request) -> HTMLResponse:
     )
 
     if not items:
-        body = f"<h1>Decisions</h1>{filters_form}<div class='empty'>No decisions match.</div>"
+        body = (
+            _page_header("Decisions")
+            + filters_form
+            + _empty("No decisions match", "Try removing the filters or broadening your time range.")
+        )
     else:
         rows = "".join(_render_decision_row(d) for d in items)
         body = (
-            f"<h1>Decisions <span class='muted'>({len(items)})</span></h1>"
-            f"{filters_form}"
-            f"<table><thead><tr><th>Topic</th><th>Outcome</th>"
-            f"<th>Participants</th><th>Confidence</th><th>ID</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            _page_header("Decisions", subtitle=f"{len(items)} item(s)")
+            + filters_form
+            + '<div class="card"><table>'
+            + "<thead><tr><th>Topic</th><th>Outcome</th>"
+            + "<th>Participants</th><th>Confidence</th><th>ID</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Decisions", body, active="/decisions"))
 
@@ -371,15 +779,20 @@ async def open_questions(request: Request) -> HTMLResponse:
     )
 
     if not items:
-        body = f"<h1>Open questions</h1>{filters_form}<div class='empty'>No open questions match.</div>"
+        body = (
+            _page_header("Open questions")
+            + filters_form
+            + _empty("No open questions match", "Try removing the filters.")
+        )
     else:
         rows = "".join(_render_question_row(q) for q in items)
         body = (
-            f"<h1>Open questions <span class='muted'>({len(items)})</span></h1>"
-            f"{filters_form}"
-            f"<table><thead><tr><th>Topic</th><th>Question</th>"
-            f"<th>Raised by</th><th>Confidence</th><th>ID</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            _page_header("Open questions", subtitle=f"{len(items)} item(s)")
+            + filters_form
+            + '<div class="card"><table>'
+            + "<thead><tr><th>Topic</th><th>Question</th>"
+            + "<th>Raised by</th><th>Confidence</th><th>ID</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Open questions", body, active="/open-questions"))
 
@@ -422,15 +835,20 @@ async def blockers(request: Request) -> HTMLResponse:
     )
 
     if not items:
-        body = f"<h1>Blockers</h1>{filters_form}<div class='empty'>No blockers match.</div>"
+        body = (
+            _page_header("Blockers")
+            + filters_form
+            + _empty("No blockers match", "Either there's nothing in the way, or your filters are too narrow.")
+        )
     else:
         rows = "".join(_render_blocker_row(b) for b in items)
         body = (
-            f"<h1>Blockers <span class='muted'>({len(items)})</span></h1>"
-            f"{filters_form}"
-            f"<table><thead><tr><th>Blocked thing</th><th>Blocked by</th>"
-            f"<th>Owner</th><th>Confidence</th><th>ID</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            _page_header("Blockers", subtitle=f"{len(items)} item(s)")
+            + filters_form
+            + '<div class="card"><table>'
+            + "<thead><tr><th>Blocked thing</th><th>Blocked by</th>"
+            + "<th>Owner</th><th>Confidence</th><th>ID</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Blockers", body, active="/blockers"))
 
@@ -456,13 +874,22 @@ async def sessions(request: Request) -> HTMLResponse:
     finally:
         conn.close()
     if not items:
-        body = "<h1>Sessions</h1><div class='empty'>No extraction sessions yet.</div>"
+        body = (
+            _page_header("Sessions")
+            + _empty(
+                "No extraction sessions yet",
+                "Each ingest creates a session. Run an ingest to see them here.",
+                "verbatim ingest path/to/meeting.txt",
+            )
+        )
     else:
         rows = "".join(_render_session_row(s) for s in items)
         body = (
-            f"<h1>Sessions <span class='muted'>({len(items)})</span></h1>"
-            f"<table><thead><tr><th>When (UTC)</th><th>Source</th><th>Kind</th>"
-            f"<th>Items</th></tr></thead><tbody>{rows}</tbody></table>"
+            _page_header("Sessions", subtitle=f"{len(items)} session(s)")
+            + '<div class="card"><table>'
+            + "<thead><tr><th>When (UTC)</th><th>Source</th><th>Kind</th>"
+            + "<th>Items</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Sessions", body, active="/sessions"))
 
@@ -474,13 +901,22 @@ async def projections(request: Request) -> HTMLResponse:
     finally:
         conn.close()
     if not items:
-        body = "<h1>Projections</h1><div class='empty'>No active projections.</div>"
+        body = (
+            _page_header("Projections")
+            + _empty(
+                "No active projections",
+                "Push commitments to Linear to see them here.",
+                "verbatim project linear --team Engineering",
+            )
+        )
     else:
         rows = "".join(_render_projection_row(p) for p in items)
         body = (
-            f"<h1>Active projections <span class='muted'>({len(items)})</span></h1>"
-            f"<table><thead><tr><th>Entity</th><th>Target</th><th>Identifier</th>"
-            f"<th>URL</th><th>Created</th></tr></thead><tbody>{rows}</tbody></table>"
+            _page_header("Active projections", subtitle=f"{len(items)} item(s)")
+            + '<div class="card"><table>'
+            + "<thead><tr><th>Entity</th><th>Target</th><th>Identifier</th>"
+            + "<th>URL</th><th>Created</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table></div>"
         )
     return HTMLResponse(_shell("Projections", body, active="/projections"))
 
@@ -509,19 +945,35 @@ async def entity_detail(request: Request) -> HTMLResponse:
     finally:
         conn.close()
     if entity is None:
-        body = f"<h1>Entity not found</h1><div class='empty'>No entity with id <span class='mono'>{html.escape(entity_id)}</span>.</div>"
+        body = (
+            _page_header("Entity not found")
+            + _empty(
+                "We couldn't find that entity",
+                f"No entity matches the id `{entity_id}`. It may have been deleted "
+                "or never existed.",
+            )
+        )
         return HTMLResponse(_shell("Not found", body), status_code=404)
 
     payload = entity["payload"]
-    rows: list[tuple[str, str]] = [("kind", html.escape(entity["kind"]))]
-    rows.append(("confidence", _confidence_badge(entity["confidence"])))
-    rows.append(("status", html.escape(entity["status"])))
-    rows.append(("created", html.escape(entity["created_at"][:19])))
-    if entity.get("merged_count"):
-        rows.append(("merged from", f"{entity['merged_count']+1} sources"))
-    if entity.get("canonical_id"):
-        rows.append(("merged into", _entity_link(entity["canonical_id"])))
 
+    # Compose a human-readable headline based on entity kind
+    if entity["kind"] == "commitment":
+        headline = f"{payload.get('actor') or '?'}: {payload.get('deliverable') or '?'}"
+    elif entity["kind"] == "decision":
+        headline = f"{payload.get('topic') or '?'} → {payload.get('outcome') or '?'}"
+    elif entity["kind"] == "open_question":
+        headline = payload.get("question") or payload.get("topic") or "?"
+    elif entity["kind"] == "blocker":
+        headline = (
+            f"{payload.get('blocked_thing') or '?'} "
+            f"blocked by {payload.get('blocked_by') or '?'}"
+        )
+    else:
+        headline = entity["kind"]
+
+    # Kind-specific dl rows
+    rows: list[tuple[str, str]] = []
     if entity["kind"] == "commitment":
         rows.append(("actor", _maybe(payload.get("actor"))))
         rows.append(("deliverable", _maybe(payload.get("deliverable"))))
@@ -555,26 +1007,56 @@ async def entity_detail(request: Request) -> HTMLResponse:
 
     dl_rows = "".join(f"<dt>{label}</dt><dd>{value}</dd>" for label, value in rows)
 
-    quotes_html = []
+    # Meta row: kind chip, confidence badge, status, merged info
+    meta_parts = [
+        f'<span class="pill">{html.escape(entity["kind"])}</span>',
+        _confidence_badge(entity["confidence"]),
+        f'<span class="pill">status: {html.escape(entity["status"])}</span>',
+    ]
+    if entity.get("merged_count"):
+        meta_parts.append(
+            f'<span class="pill">merged from {entity["merged_count"]+1} sources</span>'
+        )
+    if entity.get("canonical_id"):
+        meta_parts.append(
+            f'<span class="pill">merged into {_entity_link(entity["canonical_id"])}</span>'
+        )
+    meta_parts.append(
+        f'<span class="pill mono">created {html.escape(entity["created_at"][:19])}</span>'
+    )
+    meta_html = "".join(meta_parts)
+
+    # Source quote blocks
+    quotes_html: list[str] = []
     for s in entity.get("sources", []):
-        ts = f'<span class="ts">[{html.escape(s["approximate_timestamp"])}]</span> ' if s.get("approximate_timestamp") else ""
-        speaker = f'<span class="speaker">{html.escape(s["speaker"])}:</span> ' if s.get("speaker") else ""
+        ts = (
+            f'<span class="ts">[{html.escape(s["approximate_timestamp"])}]</span>'
+            if s.get("approximate_timestamp") else ""
+        )
+        speaker = (
+            f'<span class="speaker">{html.escape(s["speaker"])}:</span>'
+            if s.get("speaker") else ""
+        )
         rationale = (
             f'<div class="rationale">{html.escape(s["rationale"])}</div>'
             if s.get("rationale") else ""
         )
         quotes_html.append(
-            f'<div class="quote">{ts}{speaker}{html.escape(s["verbatim_quote"])}{rationale}</div>'
+            '<div class="quote">'
+            f"{ts}{speaker} {html.escape(s['verbatim_quote'])}"
+            f"{rationale}"
+            "</div>"
         )
-    quotes_block = "".join(quotes_html) or '<div class="empty">No sources.</div>'
+    quotes_block = "".join(quotes_html) or _empty("No sources", "This entity has no source quotes.")
 
     body = (
-        f"<h1>{html.escape(entity['kind'])} <span class='mono muted'>{html.escape(entity_id)}</span></h1>"
-        f"<div class='entity-detail'>"
-        f"<dl>{dl_rows}</dl>"
-        f"<h2>Sources ({len(entity.get('sources', []))})</h2>"
-        f"{quotes_block}"
-        f"</div>"
+        _page_header(headline, subtitle=f'id: {entity_id}')
+        + '<div class="entity-detail">'
+        + f'<div class="entity-meta">{meta_html}</div>'
+        + (f"<dl>{dl_rows}</dl>" if dl_rows else "")
+        + f'<h2 class="section">Sources ({len(entity.get("sources", []))})</h2>'
+        + quotes_block
+        + "</div>"
     )
     return HTMLResponse(_shell("Entity", body))
 

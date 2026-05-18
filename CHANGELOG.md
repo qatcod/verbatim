@@ -2,6 +2,27 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] — 2026-05-19
+
+### Changed — web UI redesign
+
+The v0.6 web UI was functional but plain. This release rewrites the visual system from scratch — same routes, same data model, same handler logic, just dramatically better-looking.
+
+- **Sidebar navigation** replaces top nav. Grouped sections (*State* / *Activity*), inline SVG icons, brand mark with version badge.
+- **Dark theme by default** with sophisticated token-based color palette (zinc + violet accent). `color-scheme: dark` set so form controls / scrollbars match.
+- **Modern typography** — Inter font stack, tighter line-height, proper hierarchy (page header, section labels, body, mono).
+- **Stat cards with icons** — each card has a colored icon glyph, hover state, larger numbers, better label/value contrast.
+- **Cards wrap every table** — soft borders, subtle hover state on rows, gradient card headers, count chips.
+- **Entity detail** redesigned as an article-style layout: kind/confidence/status as inline pills at top, a definition-list inside a subtle inner card, source quotes with violet-accent left border and metadata chips for timestamps.
+- **Empty states** now have a title + hint + a copy-paste-ready command code block. So a first-time user sees `verbatim ingest path/to/meeting.txt` right in the empty Sessions page.
+- **Responsive** — sidebar collapses to a horizontal nav on mobile.
+- **Same XSS guarantees** — `html.escape` on every user-supplied value. The XSS test still passes unchanged.
+
+Inline SVG icons (~10 KB total) — no external icon font, no CDN call, fully offline-capable. Whole page renders in ~18 KB.
+
+### Tests
+- 192 total, all still green. `test_active_nav_class_on_current_page` updated to match the new nav structure (anchor now contains an SVG before the label).
+
 ## [0.6.1] — 2026-05-19
 
 ### Fixed

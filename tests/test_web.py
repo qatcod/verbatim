@@ -239,7 +239,7 @@ def test_nav_links_present_on_every_page(client: TestClient) -> None:
                  "/blockers", "/sessions", "/projections"):
         r = client.get(path)
         body = r.text
-        for nav_path, label in web._NAV_LINKS:
+        for nav_path, label, _icon in web._NAV_LINKS:
             assert f'href="{nav_path}"' in body
             assert label in body
 
@@ -248,5 +248,6 @@ def test_active_nav_class_on_current_page(client: TestClient) -> None:
     r = client.get("/commitments")
     body = r.text
     # The /commitments link should have class="active"
-    assert 'href="/commitments"' in body
-    assert 'class="active">Commitments' in body
+    assert 'href="/commitments" class="active"' in body
+    # And include the label
+    assert ">Commitments<" in body
