@@ -21,10 +21,17 @@ You need a token (a bot token, `xoxb-...`, or a user token, `xoxp-...`):
 4. Install the App to your workspace
 5. Copy the "Bot User OAuth Token" — that's the value to set as
    $SLACK_TOKEN or pass via --token.
-6. Invite the bot into any public channel you want it to read:
+6. **Invite the bot into every channel you want to read history from:**
      /invite @YourBotName
+   This is the part Bot tokens can't skip — `conversations.history` requires
+   the bot to be a channel member. There's no API-level workaround.
 
-For a User token (sees everything *you* see, including private DMs):
+# Bot token vs User token
+
+If inviting the bot to every channel is friction, use a **User token**
+(`xoxp-...`) instead. User tokens act as the human and can read any channel
+that human can already read — no invites needed.
+
    - OAuth & Permissions → User Token Scopes:
        channels:history, groups:history, im:history, mpim:history, users:read
    - Install/Reinstall the App
@@ -39,7 +46,7 @@ SlackApiError on 429; we let it bubble up and surface the cause to the CLI.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Any
 
@@ -53,6 +60,30 @@ from .slack_common import (
     build_user_map,
     parse_message,
 )
+
+# Slack API error codes we treat as "this channel is inaccessible, skip it"
+# rather than "the whole run is broken".
+_PER_CHANNEL_ERRORS = frozenset({
+    "not_in_channel",
+    "channel_not_found",
+    "is_archived",
+    "missing_scope",  # bot lacks a scope for this channel type (private/im/mpim)
+})
+
+
+class ChannelNotAccessible(Exception):
+    """Raised when the token can't read a specific channel's history.
+
+    Carries the channel name plus a hint about the specific Slack error and
+    how to remedy it. The connector raises this in place of SlackApiError
+    so callers can catch one stable type and decide whether to skip or fail.
+    """
+
+    def __init__(self, channel: str, slack_error: str, hint: str) -> None:
+        self.channel = channel
+        self.slack_error = slack_error
+        self.hint = hint
+        super().__init__(f"#{channel}: {slack_error} — {hint}")
 
 
 class SlackClient:
@@ -148,12 +179,20 @@ class SlackClient:
         """Yield messages from a channel, including thread replies, in time order.
 
         Pulls top-level history first, then expands threads via conversations.replies.
+
+        Raises `ChannelNotAccessible` if the channel exists in the workspace but
+        the token can't read its history (most often: bot is not a member).
         """
         channel_id = self._resolve_channel_id(channel_name, include_private=include_private)
         if channel_id is None:
-            raise SlackApiError(
-                f"Channel not found or not accessible: #{channel_name}",
-                response={"error": "channel_not_found"},
+            raise ChannelNotAccessible(
+                channel=channel_name,
+                slack_error="channel_not_found",
+                hint=(
+                    f"#{channel_name} isn't visible to this token. "
+                    f"For private channels, the bot needs `groups:read` and must be "
+                    f"a member, or use a User token (xoxp-...) that already sees it."
+                ),
             )
 
         oldest = f"{since.timestamp():.6f}" if since else "0"
@@ -172,7 +211,17 @@ class SlackClient:
                 params["latest"] = latest
             if cursor:
                 params["cursor"] = cursor
-            resp = self._client.conversations_history(**params)
+            try:
+                resp = self._client.conversations_history(**params)
+            except SlackApiError as e:
+                err = (e.response or {}).get("error", "")
+                if err in _PER_CHANNEL_ERRORS:
+                    raise ChannelNotAccessible(
+                        channel=channel_name,
+                        slack_error=err,
+                        hint=_hint_for_error(err, channel_name),
+                    ) from e
+                raise
             top_level.extend(resp.get("messages") or [])
             cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
             if not cursor:
@@ -226,22 +275,35 @@ class SlackClient:
         min_thread_messages: int = 3,
         include_loose_messages: bool = False,
         include_private: bool = False,
+        on_channel_error: Callable[[ChannelNotAccessible], None] | None = None,
     ) -> Iterator[SlackUnit]:
         """Live equivalent of SlackExport.iter_units. Pulls user map once, then
         walks each requested channel and emits SlackUnit objects from the same
         shared builder used by the export connector.
+
+        `on_channel_error`: callback fired when a channel can't be read (bot not
+        a member, missing scope, archived, etc.). The channel is skipped and
+        the run continues with the rest. If the callback is None, the error
+        is re-raised — preserving prior fail-fast behaviour for callers that
+        prefer it.
         """
         users = self.get_users()
         chans = channels if channels else self.list_channel_names(include_private=include_private)
         for channel in chans:
-            messages = list(
-                self.iter_messages(
-                    channel,
-                    since=since,
-                    until=until,
-                    include_private=include_private,
+            try:
+                messages = list(
+                    self.iter_messages(
+                        channel,
+                        since=since,
+                        until=until,
+                        include_private=include_private,
+                    )
                 )
-            )
+            except ChannelNotAccessible as e:
+                if on_channel_error is None:
+                    raise
+                on_channel_error(e)
+                continue
             if not messages:
                 continue
             yield from build_units_from_messages(
@@ -259,3 +321,30 @@ class SlackClient:
     def _maybe_pause(self) -> None:
         if self._request_pause > 0:
             time.sleep(self._request_pause)
+
+
+def _hint_for_error(slack_error: str, channel: str) -> str:
+    """Map a Slack API error to an actionable hint."""
+    if slack_error == "not_in_channel":
+        return (
+            f"the bot is not a member of #{channel}. Invite it with "
+            f"`/invite @<your-bot-name>` in the channel, or use a User token "
+            f"(xoxp-...) instead of a Bot token — User tokens act as you and "
+            f"don't need invites."
+        )
+    if slack_error == "channel_not_found":
+        return (
+            f"#{channel} doesn't exist or isn't visible to this token. "
+            f"Check spelling, or grant the right scope (groups:read for "
+            f"private channels)."
+        )
+    if slack_error == "is_archived":
+        return f"#{channel} is archived. Slack won't return its history."
+    if slack_error == "missing_scope":
+        return (
+            f"the token lacks the right scope to read #{channel} "
+            f"(channels:history / groups:history / im:history / mpim:history "
+            f"depending on the channel type). Add it in OAuth & Permissions, "
+            f"reinstall the App."
+        )
+    return "this channel is not readable with the current token."

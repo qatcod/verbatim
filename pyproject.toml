@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "verbatim"
-version = "0.6.0"
+version = "0.6.1"
 description = "The AI memory layer for engineering teams. Extracts structured commitments, decisions, open questions, and blockers from meeting transcripts — every extraction sourced to a verbatim quote."
 readme = "README.md"
 license = { text = "MIT" }

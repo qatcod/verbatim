@@ -196,11 +196,110 @@ def test_iter_messages_passes_since_as_oldest() -> None:
     assert history_calls[0][1]["oldest"] == f"{since.timestamp():.6f}"
 
 
-def test_iter_messages_raises_for_unknown_channel() -> None:
+def test_iter_messages_raises_channel_not_accessible_for_unknown_channel() -> None:
     client, _ = make_client(channels=[])
-    from slack_sdk.errors import SlackApiError
-    with pytest.raises(SlackApiError):
+    with pytest.raises(slack_api.ChannelNotAccessible) as exc_info:
         list(client.iter_messages("doesnotexist"))
+    assert exc_info.value.channel == "doesnotexist"
+    assert exc_info.value.slack_error == "channel_not_found"
+
+
+def test_iter_messages_raises_channel_not_accessible_on_not_in_channel() -> None:
+    """Slack returns not_in_channel from conversations.history when the bot
+    is not a member of an existing channel. We convert that to ChannelNotAccessible."""
+    from slack_sdk.errors import SlackApiError
+
+    class FakeFailingClient(FakeWebClient):
+        def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("conversations_history", kwargs))
+            raise SlackApiError(
+                "channel is private to verbatim",
+                response={"error": "not_in_channel"},
+            )
+
+    client = slack_api.SlackClient(token="xoxb-test-token")
+    client._client = FakeFailingClient(  # type: ignore[assignment]
+        channels=[{"id": "C001", "name": "all-zakrs-tech"}],
+    )
+    with pytest.raises(slack_api.ChannelNotAccessible) as exc_info:
+        list(client.iter_messages("all-zakrs-tech"))
+    assert exc_info.value.channel == "all-zakrs-tech"
+    assert exc_info.value.slack_error == "not_in_channel"
+    assert "invite" in exc_info.value.hint.lower()
+
+
+def test_iter_units_skips_inaccessible_channels_via_callback() -> None:
+    """One bad channel must not abort the whole run when on_channel_error is given."""
+    from slack_sdk.errors import SlackApiError
+
+    parent_ts = "1700000000.000100"
+
+    class HalfBrokenClient(FakeWebClient):
+        def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
+            chan = kwargs["channel"]
+            self.calls.append(("conversations_history", kwargs))
+            if chan == "C002":  # the "broken" channel
+                raise SlackApiError("bot not in", response={"error": "not_in_channel"})
+            return {
+                "messages": self.history_by_channel.get(chan, []),
+                "response_metadata": {"next_cursor": ""},
+            }
+
+    client = slack_api.SlackClient(token="xoxb-test-token")
+    client._client = HalfBrokenClient(  # type: ignore[assignment]
+        users=[{"id": "U001", "profile": {"display_name_normalized": "qat"}}],
+        channels=[
+            {"id": "C001", "name": "good-channel"},
+            {"id": "C002", "name": "no-access"},
+        ],
+        history_by_channel={
+            "C001": [{
+                "type": "message", "user": "U001", "text": "do x?",
+                "ts": parent_ts, "thread_ts": parent_ts, "reply_count": 2,
+            }],
+        },
+        replies_by_parent={
+            parent_ts: [
+                {"type": "message", "user": "U001", "text": "do x?",
+                 "ts": parent_ts, "thread_ts": parent_ts},
+                {"type": "message", "user": "U001", "text": "yes",
+                 "ts": "1700000100.000300", "thread_ts": parent_ts},
+                {"type": "message", "user": "U001", "text": "ok",
+                 "ts": "1700000200.000400", "thread_ts": parent_ts},
+            ]
+        },
+    )
+
+    skipped: list[slack_api.ChannelNotAccessible] = []
+    units = list(client.iter_units(
+        channels=["good-channel", "no-access"],
+        min_thread_messages=3,
+        on_channel_error=skipped.append,
+    ))
+    # We got the unit from the good channel
+    assert len(units) == 1
+    assert units[0].channel == "good-channel"
+    # And we got told about the bad one
+    assert len(skipped) == 1
+    assert skipped[0].channel == "no-access"
+    assert skipped[0].slack_error == "not_in_channel"
+
+
+def test_iter_units_reraises_when_no_callback_provided() -> None:
+    """Without a callback, fail-fast behaviour is preserved."""
+    from slack_sdk.errors import SlackApiError
+
+    class BrokenClient(FakeWebClient):
+        def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("conversations_history", kwargs))
+            raise SlackApiError("nope", response={"error": "not_in_channel"})
+
+    client = slack_api.SlackClient(token="xoxb-test-token")
+    client._client = BrokenClient(  # type: ignore[assignment]
+        channels=[{"id": "C001", "name": "no-access"}],
+    )
+    with pytest.raises(slack_api.ChannelNotAccessible):
+        list(client.iter_units(channels=["no-access"]))
 
 
 # ----- unit assembly via shared builder -----

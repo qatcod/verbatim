@@ -2,6 +2,21 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-05-19
+
+### Fixed
+- `ingest-slack-api` no longer aborts the whole run on the first channel the bot can't read. New `ChannelNotAccessible` exception type carries the channel name + the specific Slack error code + an actionable hint (invite the bot, or switch to a User token, or add a scope). The CLI now collects per-channel failures, prints a yellow `skipping #channel: <hint>` line, and continues with the rest. Only aborts when *every* requested channel was inaccessible.
+
+### Why
+Hit while dogfooding: running `verbatim ingest-slack-api --channel all-zakrs-tech` died on the first `conversations.history` call because the bot wasn't a member of that channel. There's no API-level workaround for that — `conversations.history` genuinely requires channel membership for a Bot token — but the error wasn't surfacing the fix. Now it does, and one bad channel doesn't take down the run.
+
+Two fixes for the user when this happens:
+1. **Invite the bot:** `/invite @YourBotName` inside the channel.
+2. **Switch to a User token** (`xoxp-...` instead of `xoxb-...`): User tokens act as the human and see every channel that human can see, no invites needed. Add User Token Scopes (`channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`), reinstall the App, copy the User OAuth Token, set `SLACK_TOKEN=xoxp-...`.
+
+### Tests
+- 192 total (+3 since v0.6.0). New tests cover the `not_in_channel` → `ChannelNotAccessible` conversion path, the per-channel `on_channel_error` callback in `iter_units`, and the fail-fast preservation when no callback is provided.
+
 ## [0.6.0] — 2026-05-19
 
 Two new consumer surfaces (read-mostly web UI, email digest) plus a hotfix for the v0.5 Slack bot.

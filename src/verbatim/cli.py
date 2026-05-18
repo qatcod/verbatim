@@ -465,6 +465,12 @@ def ingest_slack_api_cmd(
             )
 
     err_console.print("[dim]Fetching messages…[/dim]")
+    skipped: list[slack_api.ChannelNotAccessible] = []
+
+    def on_skip(e: slack_api.ChannelNotAccessible) -> None:
+        skipped.append(e)
+        err_console.print(f"[yellow]skipping #{e.channel}[/yellow]: {e.hint}")
+
     try:
         units = list(
             client.iter_units(
@@ -474,11 +480,19 @@ def ingest_slack_api_cmd(
                 min_thread_messages=min_thread_messages,
                 include_loose_messages=include_loose,
                 include_private=include_private,
+                on_channel_error=on_skip,
             )
         )
     except Exception as e:  # noqa: BLE001
         err_console.print(f"[red]Slack API call failed during message fetch: {e}[/red]")
         raise typer.Exit(code=1) from None
+
+    if skipped and not units:
+        err_console.print(
+            f"[red]All {len(skipped)} requested channel(s) were inaccessible. "
+            f"Nothing to ingest.[/red]"
+        )
+        raise typer.Exit(code=1)
 
     if limit is not None:
         units = units[:limit]
