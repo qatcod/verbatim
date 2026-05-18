@@ -1,0 +1,61 @@
+Verbatim project kickoff — 2026-05-18 (20 min)
+
+Participants: Qat, Jason, Taz
+
+[00:00] Jason: Alright, thanks for hopping on. I want to talk through the Verbatim project — the meeting-to-backlog thing we kicked around in Slack last night. Qat, what's your read?
+
+[00:18] Qat: Yeah so I've been thinking about it as a much bigger product than just a notetaker. The shallow version is "extract action items from a meeting" — every tool does that. The deeper one is a continuous state graph of the team across all comms. I think we should build toward the bigger vision but ship the smallest possible v0 first to prove extraction quality.
+
+[00:42] Jason: That's the right call. Let's get something concrete in front of people before we over-engineer. What's v0?
+
+[00:51] Qat: CLI tool. Takes a transcript, calls Claude with structured output, returns commitments, decisions, open questions, and blockers — each with a verbatim quote from the transcript. JSON plus Markdown out. That's it. I'll have a working version by end of day Wednesday.
+
+[01:14] Taz: Wait, are we doing this in Python or TypeScript? I was going to suggest TypeScript because of the MCP server angle later.
+
+[01:25] Qat: Python for v0. The MCP server can be either, we'll decide when we get there. Anthropic SDK is solid in both. The constraint right now is iteration speed, not the eventual deploy story.
+
+[01:40] Taz: OK, makes sense. I'll defer.
+
+[01:45] Jason: Licensing?
+
+[01:48] Qat: MIT. We want this to spread.
+
+[01:54] Jason: Agreed. And it lives under the Data443 GitHub org?
+
+[01:58] Qat: That's what I was thinking. I'll create the repo today, push v0 once it's working.
+
+[02:08] Jason: Good. Two things I want to flag. One, I want to make sure this doesn't slow down the Vaikora Insight sprint. Insight is the revenue product; Verbatim is the credibility play. Insight wins if there's any conflict.
+
+[02:26] Qat: Got it. Verbatim is strictly side-project hours.
+
+[02:31] Jason: Two — should we be worried about the existing players? Fireflies, Otter, Granola. Why aren't they already doing this?
+
+[02:43] Qat: I think because they're all SaaS-first and sales-oriented. They target CRMs, not engineering trackers. None of them ingest Slack or PR comments. And none of them maintain state — they extract per-meeting and forget. The "continuous state" angle is the gap.
+
+[03:05] Jason: OK. Taz, can you take a look at the v0 once Qat ships it, and tell me whether the extraction quality is actually good enough? I don't want to publish a half-baked thing.
+
+[03:18] Taz: Yeah I can do that. Probably Thursday morning.
+
+[03:24] Jason: Great. One more thing — what's the name?
+
+[03:28] Qat: Verbatim.
+
+[03:30] Jason: Because every extraction is sourced to a verbatim quote?
+
+[03:34] Qat: Exactly. The name is the contract.
+
+[03:39] Jason: I like it. OK, anything blocking you?
+
+[03:44] Qat: Not right now. I'll know more once I see the extraction output on a real transcript. If quality is bad we may need to iterate on prompts before we go public.
+
+[03:58] Taz: One thing — do we have a budget for the Anthropic API tokens? Continuous extraction could get spendy.
+
+[04:08] Jason: For v0 just use my key, I'll cover it. We'll figure out the cost model before we promote it.
+
+[04:18] Taz: Cool. Will you also be sending the Xero docs over today?
+
+[04:23] Jason: Yes, sending Shai the proxy-chain one-pager this afternoon. That's separate from Verbatim though.
+
+[04:32] Qat: OK so to recap: I ship v0 by Wednesday EOD, Taz reviews Thursday morning, we decide go/no-go on a public release Thursday afternoon. Sound right?
+
+[04:46] Jason: Sounds right. Let's go.
