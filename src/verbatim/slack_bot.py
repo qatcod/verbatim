@@ -355,13 +355,25 @@ def dispatch_action(
     entity_id: str,
     user_id: str | None,
 ) -> str:
-    """Handle one button click by `verb`. Returns the ephemeral reply text."""
+    """Handle one button click by `verb`. Returns the ephemeral reply text.
+
+    Confirm and Dismiss mutate state and write an audit row. Edit and
+    Reassign no longer mutate state directly — they tell the caller to open
+    a modal (returning text confirms the click was received; the actual
+    field change comes through `apply_edit` / `apply_reassign` once the
+    operator submits the modal).
+    """
     entity = state.show_entity(conn, entity_id)
     if entity is None:
         return f"_Entity `{entity_id[:8]}…` not found — it may have been deleted._"
 
     if verb == "confirm":
         store.update_entity_status(conn, entity_id, "confirmed")
+        store.record_audit(
+            conn, entity_id=entity_id, action="confirm",
+            actor_id=user_id, actor_label=f"<@{user_id}>" if user_id else None,
+            before={"status": "open"}, after={"status": "confirmed"},
+        )
         actor = (entity.get("payload") or {}).get("actor") or "owner"
         attribution = f" by <@{user_id}>" if user_id else ""
         return (
@@ -371,6 +383,11 @@ def dispatch_action(
         )
     if verb == "dismiss":
         store.update_entity_status(conn, entity_id, "dismissed")
+        store.record_audit(
+            conn, entity_id=entity_id, action="dismiss",
+            actor_id=user_id, actor_label=f"<@{user_id}>" if user_id else None,
+            before={"status": "open"}, after={"status": "dismissed"},
+        )
         return (
             f":x: Dismissed `VRB-{entity_id[:8]}` — it won't appear in active "
             "queries. Run `verbatim unlink` or update via the web UI if this was "
@@ -378,17 +395,337 @@ def dispatch_action(
         )
     if verb == "edit":
         return (
-            f"_Editing isn't wired up in Slack yet._ Open the entity in the web UI: "
-            f"`/verbatim show {entity_id[:8]}` or visit your local "
-            "`verbatim serve` instance."
+            f"_Opening edit form for `VRB-{entity_id[:8]}`…_ "
+            "If the modal doesn't appear, your Slack app may be missing the "
+            "`views.open` permission — see verbatim slack-bot setup docs."
         )
     if verb == "reassign":
         return (
-            f"_Reassigning isn't wired up in Slack yet._ Use the CLI: "
-            f"`verbatim show {entity_id[:8]}` shows the entity; reassignment "
-            "via the web UI is on the v1 roadmap."
+            f"_Opening reassign picker for `VRB-{entity_id[:8]}`…_ "
+            "If the modal doesn't appear, your Slack app may be missing the "
+            "`views.open` permission — see verbatim slack-bot setup docs."
         )
     return f"_Unknown action `{verb}` on `VRB-{entity_id[:8]}`._"
+
+
+# ----------------------- modal builders + appliers (v0.10.1) -----------------------
+
+
+def build_edit_modal_view(entity: dict[str, Any]) -> dict[str, Any]:
+    """Build a Slack views.open modal view for editing one entity.
+
+    The modal exposes the entity's natural-language fields based on its kind:
+        commitment → deliverable, actor, deadline
+        decision   → topic, outcome
+        open_question → question, raised_by
+        blocker    → blocked_thing, blocked_by, owner
+    All inputs are optional — submitting with the original values is a no-op.
+    A free-form `note` input lets the operator explain the edit (saved to audit).
+    """
+    kind = entity["kind"]
+    eid = entity["id"]
+    payload = entity.get("payload") or {}
+
+    field_specs = _EDIT_FIELDS.get(kind, [])
+    field_blocks: list[dict[str, Any]] = []
+    for action_id, label, payload_key, multiline in field_specs:
+        current = payload.get(payload_key) or ""
+        field_blocks.append({
+            "type": "input",
+            "block_id": f"verbatim_edit_{action_id}",
+            "label": {"type": "plain_text", "text": label},
+            "optional": True,
+            "element": {
+                "type": "plain_text_input",
+                "action_id": action_id,
+                "initial_value": str(current),
+                "multiline": bool(multiline),
+            },
+        })
+
+    field_blocks.append({
+        "type": "input",
+        "block_id": "verbatim_edit_note",
+        "label": {"type": "plain_text", "text": "Note (saved to audit log)"},
+        "optional": True,
+        "element": {
+            "type": "plain_text_input",
+            "action_id": "note",
+            "multiline": True,
+        },
+    })
+
+    return {
+        "type": "modal",
+        "callback_id": f"verbatim:edit:{eid}",
+        "title": {"type": "plain_text", "text": "Edit · Verbatim"},
+        "submit": {"type": "plain_text", "text": "Save changes"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "private_metadata": eid,
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"Editing *{_KIND_LABEL.get(kind, kind)}* "
+                        f"`VRB-{eid[:8]}`. Empty fields are ignored."
+                    ),
+                },
+            },
+            {"type": "divider"},
+            *field_blocks,
+        ],
+    }
+
+
+def build_reassign_modal_view(entity: dict[str, Any]) -> dict[str, Any]:
+    """Build a Slack views.open modal for reassigning one entity.
+
+    Uses Slack's `users_select` so the operator picks a real workspace user.
+    The picked user's display name is stored on `primary_actor`; the Slack
+    user id is captured in the audit row as `actor_id` for later resolution.
+    """
+    eid = entity["id"]
+    current = (entity.get("primary_actor") or "—")
+    return {
+        "type": "modal",
+        "callback_id": f"verbatim:reassign:{eid}",
+        "title": {"type": "plain_text", "text": "Reassign · Verbatim"},
+        "submit": {"type": "plain_text", "text": "Reassign"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "private_metadata": eid,
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"Reassigning `VRB-{eid[:8]}` "
+                        f"(*currently:* {_escape_mrkdwn(current)})."
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "verbatim_reassign_user",
+                "label": {"type": "plain_text", "text": "New owner"},
+                "element": {
+                    "type": "users_select",
+                    "action_id": "user",
+                    "placeholder": {"type": "plain_text", "text": "Pick a user"},
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "verbatim_reassign_name",
+                "label": {"type": "plain_text", "text": "Display name override (optional)"},
+                "optional": True,
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "name",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Defaults to the picked Slack user's name.",
+                    },
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "verbatim_reassign_note",
+                "label": {"type": "plain_text", "text": "Note (saved to audit log)"},
+                "optional": True,
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "note",
+                    "multiline": True,
+                },
+            },
+        ],
+    }
+
+
+_EDIT_FIELDS: dict[str, list[tuple[str, str, str, bool]]] = {
+    "commitment": [
+        ("deliverable", "Deliverable", "deliverable", True),
+        ("actor", "Actor", "actor", False),
+        ("deadline", "Deadline", "deadline", False),
+    ],
+    "decision": [
+        ("topic", "Topic", "topic", False),
+        ("outcome", "Outcome", "outcome", True),
+    ],
+    "open_question": [
+        ("question", "Question", "question", True),
+        ("raised_by", "Raised by", "raised_by", False),
+    ],
+    "blocker": [
+        ("blocked_thing", "Blocked thing", "blocked_thing", False),
+        ("blocked_by", "Blocked by", "blocked_by", False),
+        ("owner", "Owner", "owner", False),
+    ],
+}
+
+
+def apply_edit(
+    conn,
+    *,
+    entity_id: str,
+    submitted_values: dict[str, str],
+    user_id: str | None,
+    user_label: str | None,
+    note: str | None,
+) -> str:
+    """Apply edit-modal submission to an entity. Returns confirmation text."""
+    entity = state.show_entity(conn, entity_id)
+    if entity is None:
+        return f"_Entity `{entity_id[:8]}…` not found._"
+
+    kind = entity["kind"]
+    field_specs = _EDIT_FIELDS.get(kind, [])
+    payload_overrides: dict[str, Any] = {}
+    new_actor: str | None = None
+    new_topic: str | None = None
+    new_deadline: str | None = None
+    for action_id, _label, payload_key, _multiline in field_specs:
+        val = submitted_values.get(action_id)
+        if val is None or val == "":
+            continue
+        payload_overrides[payload_key] = val
+        # Mirror denormalized columns where appropriate
+        if kind == "commitment" and payload_key == "actor":
+            new_actor = val
+        elif kind == "open_question" and payload_key == "raised_by":
+            new_actor = val
+        elif kind == "blocker" and payload_key == "owner":
+            new_actor = val
+        elif payload_key == "topic":
+            new_topic = val
+        elif payload_key == "deadline":
+            new_deadline = val
+
+    snapshot = store.update_entity_fields(
+        conn, entity_id,
+        primary_actor=new_actor,
+        primary_topic=new_topic,
+        deadline=new_deadline,
+        payload_overrides=payload_overrides or None,
+    )
+    if snapshot is None:
+        return f"_Entity `{entity_id[:8]}…` could not be updated._"
+    store.record_audit(
+        conn, entity_id=entity_id, action="edit",
+        actor_id=user_id,
+        actor_label=f"<@{user_id}>" if user_id else None,
+        before=snapshot["before"], after=snapshot["after"],
+        note=note,
+    )
+    changed = ", ".join(payload_overrides.keys()) or "(no changes submitted)"
+    attribution = f" by <@{user_id}>" if user_id else ""
+    return (
+        f":pencil: Edited{attribution} `VRB-{entity_id[:8]}` — updated {changed}."
+    )
+
+
+def apply_reassign(
+    conn,
+    *,
+    entity_id: str,
+    new_actor_label: str,
+    slack_user_id: str | None,
+    submitter_id: str | None,
+    note: str | None,
+) -> str:
+    """Apply reassign-modal submission. Returns confirmation text."""
+    entity = state.show_entity(conn, entity_id)
+    if entity is None:
+        return f"_Entity `{entity_id[:8]}…` not found._"
+
+    kind = entity["kind"]
+    # Mirror the new actor into the kind-specific payload field too so the
+    # web UI and projections see a consistent record.
+    payload_overrides: dict[str, Any] = {}
+    if kind == "commitment":
+        payload_overrides["actor"] = new_actor_label
+    elif kind == "open_question":
+        payload_overrides["raised_by"] = new_actor_label
+    elif kind == "blocker":
+        payload_overrides["owner"] = new_actor_label
+
+    snapshot = store.update_entity_fields(
+        conn, entity_id,
+        primary_actor=new_actor_label,
+        payload_overrides=payload_overrides or None,
+    )
+    if snapshot is None:
+        return f"_Entity `{entity_id[:8]}…` could not be updated._"
+    store.record_audit(
+        conn, entity_id=entity_id, action="reassign",
+        actor_id=submitter_id,
+        actor_label=f"<@{submitter_id}>" if submitter_id else None,
+        before=snapshot["before"], after=snapshot["after"],
+        note=(
+            f"reassigned to <@{slack_user_id}> ({new_actor_label})"
+            + (f" — {note}" if note else "")
+        ) if slack_user_id else note,
+    )
+    attribution = f" by <@{submitter_id}>" if submitter_id else ""
+    target = f"<@{slack_user_id}>" if slack_user_id else new_actor_label
+    return (
+        f":arrows_counterclockwise: Reassigned{attribution} `VRB-{entity_id[:8]}` "
+        f"to {target}."
+    )
+
+
+def _extract_input_value(
+    values: dict[str, Any], block_id: str, action_id: str,
+) -> str | None:
+    """Pull a plain-text input value out of a Slack view-submission `state.values`."""
+    block = values.get(block_id) or {}
+    elem = block.get(action_id) or {}
+    raw = elem.get("value")
+    if raw is None:
+        return None
+    raw = str(raw).strip()
+    return raw or None
+
+
+def _extract_edit_values(values: dict[str, Any]) -> dict[str, str]:
+    """Pull all `verbatim_edit_*` block inputs out of a view-submission state."""
+    out: dict[str, str] = {}
+    for block_id, fields in values.items():
+        if not block_id.startswith("verbatim_edit_"):
+            continue
+        for action_id, elem in (fields or {}).items():
+            raw = (elem or {}).get("value")
+            if raw is None:
+                continue
+            raw = str(raw).strip()
+            if raw:
+                out[action_id] = raw
+    # Strip out the audit-only note field — apply_edit takes it separately.
+    out.pop("note", None)
+    return out
+
+
+def _resolve_slack_user_label(web_client, user_id: str | None) -> str | None:
+    """Look up a Slack user's real_name / display_name via users.info."""
+    if not user_id or web_client is None:
+        return None
+    try:
+        resp = web_client.users_info(user=user_id)
+        user = (resp.get("user") if hasattr(resp, "get") else resp.data.get("user")) or {}
+        profile = user.get("profile") or {}
+        return (
+            profile.get("display_name_normalized")
+            or profile.get("display_name")
+            or profile.get("real_name_normalized")
+            or profile.get("real_name")
+            or user.get("name")
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("users.info lookup failed for %s", user_id)
+        return None
 
 
 def _merged_pill_text(merged_count: int) -> str:
@@ -492,7 +829,11 @@ class VerbatimSlackBot:
             if req.type == "slash_commands":
                 self._handle_slash_command(req.payload or {})
             elif req.type == "interactive":
-                self._handle_interactive(req.payload or {})
+                payload = req.payload or {}
+                if payload.get("type") == "view_submission":
+                    self._handle_view_submission(payload)
+                else:
+                    self._handle_interactive(payload)
             # Other event types ignored for v1
         except Exception:  # noqa: BLE001
             log.exception("slack bot failed handling request")
@@ -508,6 +849,7 @@ class VerbatimSlackBot:
         action_id = action.get("action_id") or ""
         response_url = payload.get("response_url")
         user = (payload.get("user") or {}).get("id")
+        trigger_id = payload.get("trigger_id")
 
         # Parse action_id format: "verbatim:<verb>:<entity_id>"
         try:
@@ -515,6 +857,17 @@ class VerbatimSlackBot:
         except ValueError:
             log.warning("unrecognized action_id: %r", action_id)
             return
+
+        # Edit / Reassign open a Slack modal (views.open) for field-level editing.
+        # The actual state change happens on view_submission via _handle_view_submission.
+        if verb in ("edit", "reassign") and trigger_id:
+            try:
+                self._open_modal(verb=verb, entity_id=entity_id, trigger_id=trigger_id)
+            except Exception:  # noqa: BLE001
+                log.exception("failed opening %s modal for %s", verb, entity_id)
+                # Fall through to text reply so the user knows the click was seen.
+            else:
+                return
 
         conn = state.open_db(self._db_path)
         try:
@@ -535,6 +888,76 @@ class VerbatimSlackBot:
                 self._web.chat_postEphemeral(channel=channel, user=user, text=reply)
             except Exception:  # noqa: BLE001
                 log.exception("interactive ephemeral fallback failed")
+
+    def _open_modal(
+        self, *, verb: str, entity_id: str, trigger_id: str,
+    ) -> None:
+        """Open an edit or reassign modal via Slack views.open."""
+        conn = state.open_db(self._db_path)
+        try:
+            entity = state.show_entity(conn, entity_id)
+        finally:
+            conn.close()
+        if entity is None:
+            raise ValueError(f"Entity not found: {entity_id}")
+        if verb == "edit":
+            view = build_edit_modal_view(entity)
+        elif verb == "reassign":
+            view = build_reassign_modal_view(entity)
+        else:
+            raise ValueError(f"Unsupported modal verb: {verb}")
+        self._web.views_open(trigger_id=trigger_id, view=view)
+
+    def _handle_view_submission(self, payload: dict[str, Any]) -> None:
+        """Handle a Slack view_submission — applies edit / reassign + audit."""
+        view = payload.get("view") or {}
+        callback_id = view.get("callback_id") or ""
+        submitter = (payload.get("user") or {}).get("id")
+
+        try:
+            _ns, verb, entity_id = callback_id.split(":", 2)
+        except ValueError:
+            log.warning("unrecognized view callback_id: %r", callback_id)
+            return
+
+        values = (view.get("state") or {}).get("values") or {}
+        conn = state.open_db(self._db_path)
+        try:
+            if verb == "edit":
+                submitted = _extract_edit_values(values)
+                note = _extract_input_value(values, "verbatim_edit_note", "note")
+                reply = apply_edit(
+                    conn, entity_id=entity_id, submitted_values=submitted,
+                    user_id=submitter, user_label=None, note=note,
+                )
+            elif verb == "reassign":
+                user_block = values.get("verbatim_reassign_user") or {}
+                slack_user_id = (user_block.get("user") or {}).get("selected_user")
+                override_name = _extract_input_value(
+                    values, "verbatim_reassign_name", "name",
+                )
+                note = _extract_input_value(values, "verbatim_reassign_note", "note")
+                label = override_name or _resolve_slack_user_label(
+                    self._web, slack_user_id,
+                )
+                reply = apply_reassign(
+                    conn, entity_id=entity_id,
+                    new_actor_label=label or "—",
+                    slack_user_id=slack_user_id, submitter_id=submitter,
+                    note=note,
+                )
+            else:
+                reply = f"_Unknown view callback `{verb}`._"
+        finally:
+            conn.close()
+
+        # views don't carry a response_url; ephemeral the result back to the user
+        # in their DM with the bot if we have channel context, otherwise log.
+        if submitter:
+            try:
+                self._try_dm_user(submitter, reply)
+            except Exception:  # noqa: BLE001
+                log.exception("view-submission DM fallback failed")
 
     def _handle_slash_command(self, payload: dict[str, Any]) -> None:
         text = payload.get("text") or ""

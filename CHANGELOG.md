@@ -2,6 +2,62 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] — 2026-05-20
+
+### Added — Slack HITL Edit modal + Reassign picker
+
+The Edit and Reassign buttons on extraction cards (stubbed since v0.9.5)
+are now live.
+
+**Edit** opens a Slack modal (`views.open`) with kind-specific inputs —
+commitment → deliverable / actor / deadline, decision → topic / outcome,
+question → question / raised_by, blocker → blocked_thing / blocked_by /
+owner. Inputs are pre-filled with current values; empty fields are
+ignored. A free-form note field is saved to the audit log. On submit,
+`apply_edit` rewrites the entity payload and mirrors actor/owner/raised_by
+into the denormalized `primary_actor` column.
+
+**Reassign** opens a modal with a Slack `users_select` picker. The picked
+user's display name (resolved via `users.info`) becomes the new
+`primary_actor`; an optional override field lets the operator type a name
+directly. The Slack user id is captured in the audit row for later
+identity resolution.
+
+Modal submissions arrive as `view_submission` events, handled by the new
+`_handle_view_submission`; the result is DM'd back to the submitter.
+
+### Added — audit trail
+
+New `entity_audit` table records every confirm / dismiss / edit / reassign
+action with actor, timestamp, before/after JSON snapshots, and an optional
+note. Older DBs get the table via an additive migration — no re-create.
+
+- `verbatim audit <id>` — CLI command showing an entity's full history.
+- Web entity-detail pages render an **Activity** timeline under the quote
+  evidence.
+- Confirm / Dismiss (live since v0.9.5) now write audit rows too.
+
+### Slack app scopes
+
+The Edit/Reassign modals need two additional Bot Token scopes beyond what
+v0.9.5 required: nothing new for `views.open` (it's not scope-gated), but
+**`users:read`** is now needed so Reassign can resolve a picked user's
+display name. Add it under OAuth & Permissions and reinstall the app.
+
+### Tests
+- 27 new tests across `tests/test_slack_modal.py` (modal builders, apply_edit
+  / apply_reassign across all four kinds, audit-row writing, view-submission
+  end-to-end, Slack-user resolution, input-extraction helpers) plus updated
+  assertions in `tests/test_slack_hitl.py` for the edit/reassign buttons'
+  new modal-opening behavior.
+
+### Why
+Confirm / Dismiss alone make the Slack card a yes/no gate. Edit + Reassign
+make it a real triage surface — a wrong actor or a vague deliverable can be
+fixed in place instead of forcing a context-switch to the CLI. The audit
+trail is the safety net: every in-Slack mutation is now traceable to a
+person and a time.
+
 ## [0.10.0] — 2026-05-20
 
 ### Added — Person view

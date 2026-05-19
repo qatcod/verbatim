@@ -2143,6 +2143,48 @@ def show_cmd(
     _print_entity_detail(entity)
 
 
+@app.command(name="audit")
+def audit_cmd(
+    entity_id: str = typer.Argument(..., help="Entity id (or prefix) to show history for."),
+    limit: int = typer.Option(50, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Show the audit trail for an entity — every confirm / dismiss / edit /
+    reassign action, who did it, and when.
+    """
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_id_prefix(conn, entity_id)
+        if full_id is None:
+            err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
+            raise typer.Exit(code=1)
+        rows = store.fetch_audit(conn, full_id, limit=limit)
+    finally:
+        conn.close()
+
+    if not rows:
+        console.print(
+            f"[dim]No recorded activity for `VRB-{full_id[:8]}`. "
+            "Audit rows are written by Slack HITL actions and field edits.[/dim]"
+        )
+        return
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("when", style="dim", no_wrap=True)
+    table.add_column("action", no_wrap=True)
+    table.add_column("by")
+    table.add_column("note")
+    for r in rows:
+        table.add_row(
+            (r["created_at"] or "")[:19].replace("T", " "),
+            r["action"],
+            r.get("actor_label") or r.get("actor_id") or "—",
+            r.get("note") or "",
+        )
+    console.print(f"\n[bold]Activity for[/bold] [cyan]VRB-{full_id[:8]}[/cyan]")
+    console.print(table)
+
+
 def _reconcile_preview(
     conn,
     *,

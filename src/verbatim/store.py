@@ -88,6 +88,21 @@ CREATE INDEX IF NOT EXISTS idx_projections_entity ON projections(entity_id);
 CREATE INDEX IF NOT EXISTS idx_projections_target ON projections(target_kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projections_unique
     ON projections(entity_id, target_kind, status);
+
+CREATE TABLE IF NOT EXISTS entity_audit (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor_id TEXT,
+    actor_label TEXT,
+    before_json TEXT,
+    after_json TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON entity_audit(entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON entity_audit(created_at);
 """
 
 
@@ -106,6 +121,33 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id)")
     if "merged_at" not in existing_cols:
         conn.execute("ALTER TABLE entities ADD COLUMN merged_at TEXT")
+
+    # entity_audit table (added in v0.10.1). Older DBs predate the SCHEMA
+    # declaration, so an explicit CREATE TABLE IF NOT EXISTS keeps them
+    # working without a forced re-create. CREATE INDEX IF NOT EXISTS covers
+    # the index too.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entity_audit (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_id TEXT,
+            actor_label TEXT,
+            before_json TEXT,
+            after_json TEXT,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_entity ON entity_audit(entity_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_created ON entity_audit(created_at)"
+    )
 
 
 def resolve_db_path(path: str | Path | None = None) -> Path:
@@ -417,6 +459,122 @@ def update_entity_status(conn: sqlite3.Connection, entity_id: str, status: str) 
         (status, entity_id),
     )
     return cur.rowcount > 0
+
+
+# ----------------------- entity field updates + audit log -----------------------
+
+
+def update_entity_fields(
+    conn: sqlite3.Connection,
+    entity_id: str,
+    *,
+    primary_actor: str | None = None,
+    primary_topic: str | None = None,
+    deadline: str | None = None,
+    payload_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Update one entity's fields and rewrite payload_json from `payload_overrides`.
+
+    Returns the (before, after) snapshot if the row existed, else None.
+    Callers should pair this with `record_audit` for traceability.
+    """
+    row = conn.execute(
+        "SELECT primary_actor, primary_topic, deadline, payload_json "
+        "FROM entities WHERE id = ?",
+        (entity_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    before = {
+        "primary_actor": row["primary_actor"],
+        "primary_topic": row["primary_topic"],
+        "deadline": row["deadline"],
+        "payload": json.loads(row["payload_json"]),
+    }
+    new_actor = primary_actor if primary_actor is not None else row["primary_actor"]
+    new_topic = primary_topic if primary_topic is not None else row["primary_topic"]
+    new_deadline = deadline if deadline is not None else row["deadline"]
+    new_payload = dict(before["payload"])
+    if payload_overrides:
+        new_payload.update({k: v for k, v in payload_overrides.items() if v is not None})
+
+    conn.execute(
+        "UPDATE entities SET primary_actor = ?, primary_topic = ?, "
+        "deadline = ?, payload_json = ? WHERE id = ?",
+        (
+            new_actor, new_topic, new_deadline,
+            json.dumps(new_payload, ensure_ascii=False),
+            entity_id,
+        ),
+    )
+    return {
+        "before": before,
+        "after": {
+            "primary_actor": new_actor,
+            "primary_topic": new_topic,
+            "deadline": new_deadline,
+            "payload": new_payload,
+        },
+    }
+
+
+def record_audit(
+    conn: sqlite3.Connection,
+    *,
+    entity_id: str,
+    action: str,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+    note: str | None = None,
+) -> str:
+    """Write one audit-log row. Returns the new row's id.
+
+    `action` is a short verb: 'confirm', 'dismiss', 'edit', 'reassign',
+    'resolve', 'create', 'merge', 'unlink'. The before/after dicts are
+    serialized as JSON for replay.
+    """
+    audit_id = new_id()
+    conn.execute(
+        """
+        INSERT INTO entity_audit (
+            id, entity_id, action, actor_id, actor_label,
+            before_json, after_json, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            audit_id, entity_id, action, actor_id, actor_label,
+            json.dumps(before, ensure_ascii=False) if before is not None else None,
+            json.dumps(after, ensure_ascii=False) if after is not None else None,
+            note, utc_now_iso(),
+        ),
+    )
+    return audit_id
+
+
+def fetch_audit(
+    conn: sqlite3.Connection, entity_id: str, *, limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return the audit log for one entity, newest first."""
+    rows = conn.execute(
+        """
+        SELECT id, entity_id, action, actor_id, actor_label,
+               before_json, after_json, note, created_at
+        FROM entity_audit
+        WHERE entity_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (entity_id, limit),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["before"] = json.loads(d.pop("before_json")) if d.get("before_json") else None
+        d["after"] = json.loads(d.pop("after_json")) if d.get("after_json") else None
+        out.append(d)
+    return out
 
 
 def db_stats(conn: sqlite3.Connection) -> dict[str, int]:

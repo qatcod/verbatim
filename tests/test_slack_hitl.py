@@ -206,7 +206,9 @@ def test_dispatch_dismiss_marks_entity_dismissed(tmp_db_path: Path) -> None:
     assert "Dismissed" in reply
 
 
-def test_dispatch_edit_says_not_yet_implemented(tmp_db_path: Path) -> None:
+def test_dispatch_edit_returns_modal_intent(tmp_db_path: Path) -> None:
+    """Edit button click without a trigger_id returns a 'modal will open' text
+    reply; clicking with a trigger_id is exercised in test_slack_modal."""
     eid = _seed_commitment(tmp_db_path)
     conn = state.open_db(tmp_db_path)
     try:
@@ -214,19 +216,19 @@ def test_dispatch_edit_says_not_yet_implemented(tmp_db_path: Path) -> None:
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    # Edit doesn't change state
+    # Edit doesn't mutate state on a bare click — that comes from view_submission.
     assert entity["status"] == "open"
-    assert "not wired up" in reply.lower() or "isn't wired up" in reply.lower()
+    assert "opening edit" in reply.lower()
 
 
-def test_dispatch_reassign_says_not_yet_implemented(tmp_db_path: Path) -> None:
+def test_dispatch_reassign_returns_modal_intent(tmp_db_path: Path) -> None:
     eid = _seed_commitment(tmp_db_path)
     conn = state.open_db(tmp_db_path)
     try:
         reply = slack_bot.dispatch_action(conn, verb="reassign", entity_id=eid, user_id="U001")
     finally:
         conn.close()
-    assert "not wired up" in reply.lower() or "isn't wired up" in reply.lower()
+    assert "opening reassign" in reply.lower()
 
 
 def test_dispatch_unknown_verb_returns_clear_error(tmp_db_path: Path) -> None:

@@ -1685,6 +1685,8 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
         "</div>"
     )
 
+    audit_html = _render_audit_trail(entity.get("audit") or [])
+
     return f"""
 <section class="detail" id="main-content">
   <header class="detail-header">
@@ -1712,6 +1714,7 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
       <h1 class="entity-title">{html.escape(summary)}</h1>
       {quote_hero}
       {more_quotes_html}
+      {audit_html}
     </div>
     <aside class="detail-side">
       <div class="side-block">
@@ -1726,6 +1729,53 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
   </div>
 </section>
 """
+
+
+_AUDIT_ACTION_LABEL = {
+    "confirm": "Confirmed",
+    "dismiss": "Dismissed",
+    "edit": "Edited",
+    "reassign": "Reassigned",
+    "resolve": "Resolved",
+    "create": "Created",
+    "merge": "Merged",
+    "unlink": "Unlinked",
+}
+
+
+def _render_audit_trail(audit: list[dict[str, Any]]) -> str:
+    """Render the audit log as a compact timeline under the entity body."""
+    if not audit:
+        return ""
+    items: list[str] = []
+    for row in audit:
+        action_label = _AUDIT_ACTION_LABEL.get(row["action"], row["action"].title())
+        when = _ts_relative(row.get("created_at"))
+        who_raw = row.get("actor_label") or row.get("actor_id") or "—"
+        # actor_label may already contain Slack <@USER> mrkdwn from a Slack
+        # bot action — render the raw text rather than rendering as a link.
+        who = html.escape(who_raw)
+        note = row.get("note")
+        note_html = (
+            f'<div class="audit-note">{html.escape(note)}</div>' if note else ""
+        )
+        items.append(
+            '<li class="audit-item">'
+            f'<div class="audit-head">'
+            f'<strong>{html.escape(action_label)}</strong>'
+            f'<span class="audit-when">{html.escape(when)}</span>'
+            "</div>"
+            f'<div class="audit-actor">by {who}</div>'
+            f"{note_html}"
+            "</li>"
+        )
+    return (
+        '<div class="audit-trail">'
+        '<h3 class="audit-h">Activity</h3>'
+        '<ol class="audit-list">'
+        + "".join(items)
+        + "</ol></div>"
+    )
 
 
 # ----------------------- counts -----------------------
@@ -1847,6 +1897,7 @@ async def entity_detail(request: Request) -> HTMLResponse:
         entity = state.show_entity(conn, entity_id)
         if entity:
             _enrich_entity_with_session(conn, entity)
+            entity["audit"] = store.fetch_audit(conn, entity["id"])
         counts = _all_counts(conn) if entity else {}
     finally:
         conn.close()
