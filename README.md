@@ -33,7 +33,7 @@ Plus the non-negotiables: open source, self-hostable, bring your own LLM, every 
 ## Install
 
 ```bash
-pip install verbatim
+pip install verbatim-ai
 ```
 
 Or from source:

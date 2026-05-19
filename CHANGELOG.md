@@ -2,6 +2,25 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] — 2026-05-20
+
+### Renamed PyPI distribution to `verbatim-ai`
+
+The original `verbatim` name on PyPI is owned by an unrelated project, so
+`pip install verbatim` resolves to someone else's package. We now publish
+as `verbatim-ai`. The CLI command, the import name, and `src/verbatim/`
+are unchanged — only the distribution name on PyPI changed:
+
+```bash
+pip install verbatim-ai     # was: pip install verbatim
+verbatim --help             # unchanged
+import verbatim             # unchanged
+```
+
+v0.9.6 was tagged but the publish step 403'd against PyPI (token scope vs.
+existing project name), so this is the first version that actually lands
+on PyPI.
+
 ## [0.9.6] — 2026-05-19
 
 ### Added — PyPI release pipeline

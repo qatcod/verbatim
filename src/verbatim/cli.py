@@ -984,7 +984,7 @@ def init_cmd(
 ) -> None:
     """First-run wizard. Validates env, sets up the DB, runs a sample extraction.
 
-    Designed to take a brand-new user from `pip install verbatim` to seeing
+    Designed to take a brand-new user from `pip install verbatim-ai` to seeing
     real extracted output in under 60 seconds. Detects existing state so it's
     safe to run multiple times.
     """
