@@ -1,0 +1,123 @@
+name: Release to PyPI
+
+# Triggered when a tag of the form vX.Y.Z is pushed. Builds a wheel + sdist,
+# verifies the tag matches the package version, and publishes to PyPI via
+# trusted publishing (OIDC, no API token stored in the repo).
+#
+# To cut a release:
+#   1. bump version in pyproject.toml + src/verbatim/__init__.py
+#   2. update CHANGELOG.md
+#   3. git tag vX.Y.Z && git push origin vX.Y.Z
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Verify tag matches package version
+        id: version
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "Package version: $PKG_VERSION"
+          echo "Tag version: $TAG"
+          if [ "$GITHUB_REF" != "${GITHUB_REF#refs/tags/}" ] && [ "$PKG_VERSION" != "$TAG" ]; then
+            echo "::error::Tag v$TAG does not match pyproject.toml version $PKG_VERSION"
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check distributions
+        run: twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/verbatim/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write  # required for trusted publishing
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          python - <<'PY' > release_notes.md
+          import os, re
+          version = os.environ["VERSION"]
+          text = open("CHANGELOG.md").read()
+          pattern = re.compile(
+              rf"##\s*\[?{re.escape(version)}\]?.*?\n(.*?)(?=\n##\s*\[?\d|\Z)",
+              re.DOTALL,
+          )
+          m = pattern.search(text)
+          print(m.group(1).strip() if m else f"Release v{version}")
+          PY
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ needs.build.outputs.version }}"
+          body_path: release_notes.md
+          files: dist/*
+          draft: false
+          prerelease: false

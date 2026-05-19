@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verbatim — the AI memory layer for engineering teams</title>
+<meta name="description" content="Extract structured commitments, decisions, open questions, and blockers from meeting transcripts. Every extraction sourced to a verbatim quote. Open source. Runs on Claude or local Ollama.">
+<meta property="og:title" content="Verbatim — the AI memory layer for engineering teams">
+<meta property="og:description" content="Turn meeting transcripts into a structured, queryable record. Open source. Claude or local Ollama.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://qatcod.github.io/verbatim/">
+<meta name="theme-color" content="#0b0b10">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0b10;
+    --bg-elev: #11121a;
+    --bg-card: #14151f;
+    --border: #1e1f2b;
+    --border-strong: #2a2c3d;
+    --text: #eef0f6;
+    --text-dim: #a8accb;
+    --text-faint: #6b7090;
+    --accent: #a78bfa;        /* commitment violet */
+    --accent-strong: #c4b5fd;
+    --teal: #5eead4;          /* decision */
+    --amber: #fcd34d;         /* question */
+    --rose: #fda4af;          /* blocker */
+    --code-bg: #0c0d14;
+    --max: 1080px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --bg-elev: #f7f7fb;
+      --bg-card: #ffffff;
+      --border: #e6e7ee;
+      --border-strong: #d4d5de;
+      --text: #0c0d14;
+      --text-dim: #4b4f6a;
+      --text-faint: #7a7e98;
+      --accent: #6d28d9;
+      --accent-strong: #5b21b6;
+      --teal: #0d9488;
+      --amber: #b45309;
+      --rose: #be123c;
+      --code-bg: #f1f1f6;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  code, pre, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  a { color: var(--accent-strong); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+  /* nav */
+  nav.top {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 18px var(--accent); }
+  nav.top a.navlink { color: var(--text-dim); font-size: 14px; margin-left: 20px; }
+  nav.top a.navlink:hover { color: var(--text); text-decoration: none; }
+
+  /* hero */
+  header.hero { padding: 80px 0 56px; border-bottom: 1px solid var(--border); }
+  .eyebrow {
+    display: inline-flex; gap: 8px; align-items: center;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--bg-card); border: 1px solid var(--border-strong);
+    font-size: 12px; color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+  .eyebrow .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+  h1 {
+    font-size: clamp(40px, 6vw, 64px); line-height: 1.05;
+    letter-spacing: -0.025em; font-weight: 800;
+    margin: 22px 0 18px;
+  }
+  h1 .grad {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--teal) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { font-size: 19px; color: var(--text-dim); max-width: 680px; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 18px; border-radius: 10px;
+    font-weight: 600; font-size: 14px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card); color: var(--text);
+    transition: transform .08s ease, border-color .15s ease;
+  }
+  .btn:hover { text-decoration: none; border-color: var(--accent); transform: translateY(-1px); }
+  .btn.primary { background: var(--accent); color: #0b0b10; border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+
+  /* terminal preview */
+  .terminal {
+    margin-top: 48px;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    background: var(--code-bg);
+    overflow: hidden;
+    box-shadow: 0 12px 48px rgba(0,0,0,.35);
+  }
+  .terminal .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .terminal .bar .dotbtn { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .terminal .bar .label { margin-left: 10px; font-size: 12px; color: var(--text-faint); }
+  .terminal pre {
+    margin: 0; padding: 18px 20px; font-size: 13.5px; line-height: 1.65;
+    color: var(--text); overflow-x: auto;
+  }
+  .terminal .prompt { color: var(--teal); }
+  .terminal .cmd { color: var(--accent-strong); }
+  .terminal .ok { color: var(--teal); }
+  .terminal .com { color: var(--text-faint); }
+  .terminal .vrb { color: var(--accent); }
+  .terminal .quote { color: var(--amber); }
+
+  /* sections */
+  section { padding: 80px 0; border-bottom: 1px solid var(--border); }
+  h2 { font-size: 32px; letter-spacing: -0.02em; font-weight: 700; margin: 0 0 12px; }
+  .section-lede { color: var(--text-dim); font-size: 16px; max-width: 640px; margin: 0 0 40px; }
+
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px;
+    transition: border-color .15s ease, transform .08s ease;
+  }
+  .card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  .card .tag {
+    display: inline-flex; padding: 3px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .card.commit .tag { background: rgba(167,139,250,.14); color: var(--accent-strong); }
+  .card.decide .tag { background: rgba(94,234,212,.14); color: var(--teal); }
+  .card.question .tag { background: rgba(252,211,77,.14); color: var(--amber); }
+  .card.blocker .tag { background: rgba(253,164,175,.14); color: var(--rose); }
+  .card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .card p { margin: 0; color: var(--text-dim); font-size: 14px; }
+
+  /* feature rows */
+  .features { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .feat {
+    padding: 22px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-card);
+  }
+  .feat h3 { font-size: 15px; font-weight: 600; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+  .feat h3 .ico {
+    width: 26px; height: 26px; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(167,139,250,.12); color: var(--accent-strong);
+    font-size: 14px;
+  }
+  .feat p { margin: 0; color: var(--text-dim); font-size: 14px; }
+
+  /* code snippet */
+  pre.snippet {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  pre.snippet .com { color: var(--text-faint); }
+  pre.snippet .kw { color: var(--accent-strong); }
+
+  /* footer */
+  footer { padding: 40px 0 80px; }
+  footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; color: var(--text-faint); font-size: 13px; }
+
+  @media (max-width: 640px) {
+    header.hero { padding: 56px 0 40px; }
+    h1 { font-size: 38px; }
+    .lede { font-size: 16px; }
+    section { padding: 56px 0; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="dot"></span>
+      <span>verbatim</span>
+    </div>
+    <div>
+      <a class="navlink" href="#features">Features</a>
+      <a class="navlink" href="#install">Install</a>
+      <a class="navlink" href="https://github.com/qatcod/verbatim">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow"><span class="pulse"></span> v0.9.5 · open source · MIT</span>
+    <h1>The <span class="grad">AI memory layer</span> for engineering teams.</h1>
+    <p class="lede">
+      Verbatim turns meeting transcripts into a structured, queryable record of
+      every commitment, decision, open question, and blocker — each one sourced
+      to an exact verbatim quote. Slack, GitHub, Linear, Jira, daemon mode,
+      local LLMs. <strong>Free forever.</strong>
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="#install">Install</a>
+      <a class="btn" href="https://github.com/qatcod/verbatim">View on GitHub →</a>
+      <a class="btn" href="https://github.com/qatcod/verbatim/blob/main/CHANGELOG.md">Changelog</a>
+    </div>
+
+    <div class="terminal">
+      <div class="bar">
+        <span class="dotbtn"></span><span class="dotbtn"></span><span class="dotbtn"></span>
+        <span class="label">~/work — verbatim</span>
+      </div>
+<pre><span class="prompt">$</span> <span class="cmd">verbatim ingest standup.txt</span>
+
+<span class="ok">✓</span> Saved 4 items from standup.txt
+  <span class="vrb">VRB-a1b2c3d4</span>  commitment  Qat → ship CULA prototype  <span class="com">(Friday)</span>
+  <span class="vrb">VRB-e5f6a7b8</span>  decision    use Kafka for replay cache
+  <span class="vrb">VRB-9c0d1e2f</span>  question    who owns the m2w domain config?
+  <span class="vrb">VRB-3a4b5c6d</span>  blocker     waiting on Cyren tier-3 JWT
+
+<span class="prompt">$</span> <span class="cmd">verbatim show a1b2c3d4</span>
+
+<span class="vrb">VRB-a1b2c3d4</span>  commitment  open  high-confidence
+Actor:     Qat
+Deadline:  Friday
+Quote:     <span class="quote">"I'll have the CULA prototype shipped by Friday."</span>
+Source:    standup.txt · line 47 · 2026-05-18
+</pre>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Four entity types. One verbatim quote each.</h2>
+    <p class="section-lede">
+      Every extraction must point at the exact words that produced it. No
+      hallucinated action items. No summarized "the team agreed to…" with no receipt.
+    </p>
+    <div class="grid">
+      <div class="card commit">
+        <span class="tag">Commitment</span>
+        <h3>Who owes what, by when</h3>
+        <p>Actor, deliverable, deadline. Open → confirmed → resolved status flow.</p>
+      </div>
+      <div class="card decide">
+        <span class="tag">Decision</span>
+        <h3>What was settled</h3>
+        <p>The choice and the alternative it ruled out. Searchable later.</p>
+      </div>
+      <div class="card question">
+        <span class="tag">Question</span>
+        <h3>Open threads</h3>
+        <p>What was asked and not answered. Auto-promotes to a follow-up.</p>
+      </div>
+      <div class="card blocker">
+        <span class="tag">Blocker</span>
+        <h3>What's stuck on what</h3>
+        <p>Item, blocked-by, owner. Visible across surfaces until cleared.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Where it lives</h2>
+    <p class="section-lede">
+      Verbatim runs locally as a CLI, daemon, MCP server, or web UI — and
+      bridges into the tools you already use.
+    </p>
+    <div class="features">
+      <div class="feat"><h3><span class="ico">⌘</span> CLI &amp; web UI</h3><p>Linear-style three-pane browser, dark / light theme, full-text and entity-type filters.</p></div>
+      <div class="feat"><h3><span class="ico">⌬</span> Slack HITL</h3><p>Confirm, dismiss, edit, reassign — straight from a Block Kit card in the channel.</p></div>
+      <div class="feat"><h3><span class="ico">⎔</span> Daemon mode</h3><p>Watches a folder, ingests new transcripts, posts a digest. Set and forget.</p></div>
+      <div class="feat"><h3><span class="ico">⌗</span> MCP server</h3><p>Plug Verbatim's memory into Claude, Claude Code, or any MCP-aware agent.</p></div>
+      <div class="feat"><h3><span class="ico">⇄</span> Projections</h3><p>Sync commitments to GitHub Issues, Jira, or Linear with one command.</p></div>
+      <div class="feat"><h3><span class="ico">◐</span> Local LLM</h3><p>Anthropic Claude by default — or any tool-calling model via Ollama. $0, air-gapped.</p></div>
+      <div class="feat"><h3><span class="ico">$</span> Cost guardrails</h3><p>Per-model spend tracking, daily budget caps, dry-run mode before any paid call.</p></div>
+      <div class="feat"><h3><span class="ico">⛬</span> Ingest anywhere</h3><p>Slack live API, Slack export ZIP, GitHub PR discussions, plain transcripts.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="section-lede">Python 3.10+. One pip install, then run the init wizard.</p>
+<pre class="snippet"><span class="com"># install</span>
+pip install verbatim
+
+<span class="com"># interactive setup — picks model, API keys, default surfaces</span>
+verbatim init
+
+<span class="com"># extract from a transcript</span>
+verbatim ingest meeting.txt
+
+<span class="com"># browse the web UI on localhost:8765</span>
+verbatim web
+
+<span class="com"># or run fully local on Ollama, no API key required</span>
+verbatim ingest meeting.txt --model ollama:llama3.1:8b</pre>
+    <div class="cta-row">
+      <a class="btn primary" href="https://github.com/qatcod/verbatim">Source on GitHub →</a>
+      <a class="btn" href="https://pypi.org/project/verbatim/">PyPI</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>Verbatim · MIT licensed · built in the open</div>
+    <div><a href="https://github.com/qatcod/verbatim">github.com/qatcod/verbatim</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

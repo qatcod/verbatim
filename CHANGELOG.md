@@ -2,6 +2,53 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] — 2026-05-19
+
+### Added — PyPI release pipeline
+
+`.github/workflows/release.yml` ships a three-job pipeline that fires on
+any `v*` tag push:
+
+1. **build** — sets up Python 3.12, runs `python -m build` to produce sdist
+   and wheel, verifies the tag matches `pyproject.toml`'s version, and runs
+   `twine check` on both artifacts.
+2. **publish-pypi** — publishes via [PyPI Trusted Publishing][tp] (OIDC,
+   `pypa/gh-action-pypi-publish@release/v1`). No API token stored in the
+   repo; the `pypi` GitHub Environment grants permission.
+3. **github-release** — extracts the matching CHANGELOG section, attaches
+   the built distributions, and creates the GitHub Release.
+
+[tp]: https://docs.pypi.org/trusted-publishers/
+
+Cutting a release is now:
+
+```bash
+# bump version in pyproject.toml + src/verbatim/__init__.py
+# add CHANGELOG entry
+git tag v0.9.6
+git push origin v0.9.6
+```
+
+The verification step exits the workflow if the tag and `pyproject.toml`
+version diverge — protects against the classic "tagged but forgot to bump"
+mistake.
+
+### Added — landing page
+
+`docs/index.html` is a single-file landing page styled to match the
+Verbatim design language (Inter + JetBrains Mono, commitment-violet
+accent, dark/light auto-theming). Includes hero, terminal preview, the
+four entity-type cards, surface grid, and an install snippet.
+
+`.github/workflows/pages.yml` deploys `docs/` to GitHub Pages on every
+push to `main` that touches the docs folder. `.nojekyll` is set so the
+static HTML is served as-is.
+
+### Why
+Two artifacts launch needs: a one-line install (`pip install verbatim`)
+and a URL to share. Both go live together when the first tag is pushed
+post-launch.
+
 ## [0.9.5] — 2026-05-19
 
 ### Added — Slack interactive HITL
