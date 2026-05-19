@@ -2,6 +2,16 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] — 2026-05-19
+
+### Added — OSS hygiene before public launch
+
+- `CODE_OF_CONDUCT.md` — short, custom code of conduct (inspired by Contributor Covenant). Sets expectations for issue / PR / discussion conduct and the enforcement path.
+- `SECURITY.md` — responsible-disclosure policy. Contact channel, expected response timeline, scope (in / out), and the trust model (single-user self-host default).
+
+### Why
+Going public in June. These two files are the standard signals that a repo is a real project, not a weekend hack — they sit at the top of GitHub's "Community" tab and get checked by potential users before they decide whether to try.
+
 ## [0.8.0] — 2026-05-19
 
 Implementation of the Claude Design handoff. The web UI moves from a one-column dashboard to a Linear-style three-pane inbox shell. The original prototype is preserved at `docs/design/verbatim.html` for reference.
