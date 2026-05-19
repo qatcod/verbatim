@@ -2,6 +2,79 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-05-20
+
+### Added — Person view
+
+`verbatim query person <name>` and `/person/<name>` in the web UI aggregate
+everything tied to a person across all four entity kinds:
+
+- **Commitments** they're on the hook for (`primary_actor = name`)
+- **Decisions** they participated in (JSON1 lookup on `payload.participants`)
+- **Questions** they raised (`primary_actor = name`, kind=open_question)
+- **Blockers** they own (`primary_actor = name`, kind=blocker)
+
+The single-pane answer to "what's Alice on the hook for?", which used to
+require running four separate filtered queries.
+
+`verbatim query people` + `/people` list every distinct person who appears
+in the state graph, sorted by frequency. Case-only duplicates ("Qat" vs
+"QAT") fold into one entry.
+
+A "People" item now sits in the web UI sidebar between Blockers and
+Sessions, with a live count of known people.
+
+Match is case-insensitive substring — `query person qat` resolves "Qat",
+"Qatadah", or "qatcod" alike.
+
+### Added — Docker image (ghcr.io/qatcod/verbatim-ai)
+
+Multi-stage `Dockerfile` (python:3.12-slim builder + runtime) installs
+verbatim-ai from a locally built wheel, runs as the unprivileged `verbatim`
+user, persists state under `/data` (override with `$VERBATIM_DB_PATH`),
+exposes 8765 for the web UI. ~376MB final image. Multi-arch
+(linux/amd64 + linux/arm64).
+
+`.github/workflows/docker.yml` builds and pushes to GitHub Container
+Registry on every tag push and merge to main; `:edge` tracks main,
+`:latest` and `:vX.Y.Z` track tags. Auth via `GITHUB_TOKEN` (no extra
+registry secret needed).
+
+### Added — Homebrew formula
+
+`packaging/homebrew/verbatim-ai.rb` ships a complete Homebrew formula with
+a `virtualenv_install_with_resources` install path. Once placed in a
+`homebrew-verbatim` tap repo, users install with:
+
+```bash
+brew tap qatcod/verbatim
+brew install verbatim-ai
+```
+
+See `packaging/homebrew/TAP_SETUP.md` for the one-time tap setup and
+instructions for regenerating dependency SHAs with `homebrew-pypi-poet` on
+each release.
+
+### Added — README badges
+
+PyPI version, supported Python versions, license, CI status, and PyPI
+monthly downloads, rendered as shields.io badges at the top of the
+README.
+
+### Tests
+- 16 new tests in `tests/test_person.py`: store.fetch_person across all four
+  kinds (case-insensitive, substring, unknown-name, resolved filter,
+  participants JSON1 path), list_known_people (frequency sort, case folding),
+  /people route (renders + empty state), /person/<name> route (renders +
+  unknown name + HTML escaping), sidebar nav link.
+
+### Why
+Person view is the question every new visitor asks first ("what does Alice
+owe?") and used to require chaining four separate `--actor` filters.
+Docker + Homebrew open install paths for users who don't want to think
+about Python virtualenvs. Badges signal "alive, tested, version current"
+at first glance.
+
 ## [0.9.7] — 2026-05-20
 
 ### Renamed PyPI distribution to `verbatim-ai`

@@ -616,3 +616,153 @@ def search_entities(
                 entity["sources"].extend(fetch_sources(conn, mid))
             out["source_match"].append(entity)
     return out
+
+
+# ----------------------- person view -----------------------
+
+
+def fetch_person(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    include_resolved: bool = False,
+    limit_per_kind: int = 100,
+) -> dict[str, Any]:
+    """Aggregate everything tied to a person.
+
+    Resolves three buckets via `primary_actor` (the kind's natural anchor —
+    commitment.actor, open_question.raised_by, blocker.owner) plus a
+    JSON1-extracted bucket for decisions where the person appears in
+    `payload.participants`. Match is case-insensitive substring on
+    `primary_actor`, so 'qat' resolves 'Qat' / 'Qatadah' / 'qatcod'.
+    """
+    like = f"%{name}%"
+    status_clause = "" if include_resolved else " AND e.status = 'open'"
+
+    # commitments / questions / blockers: primary_actor is the anchor
+    commitments = _fetch_entities_by_actor(
+        conn, kind="commitment", like=like, limit=limit_per_kind,
+        status_clause=status_clause,
+    )
+    questions = _fetch_entities_by_actor(
+        conn, kind="open_question", like=like, limit=limit_per_kind,
+        status_clause=status_clause,
+    )
+    blockers = _fetch_entities_by_actor(
+        conn, kind="blocker", like=like, limit=limit_per_kind,
+        status_clause=status_clause,
+    )
+
+    # decisions: participants array in payload_json; use JSON1
+    decision_rows = conn.execute(
+        f"""
+        SELECT DISTINCT e.id
+        FROM entities e, json_each(e.payload_json, '$.participants') AS p
+        WHERE e.kind = 'decision'
+          AND e.canonical_id IS NULL
+          AND p.value LIKE ? COLLATE NOCASE
+          {status_clause}
+        ORDER BY e.created_at DESC
+        LIMIT ?
+        """,
+        (like, limit_per_kind),
+    ).fetchall()
+    decisions: list[dict[str, Any]] = []
+    for r in decision_rows:
+        entity = fetch_entity(conn, r["id"])
+        if entity is None:
+            continue
+        merged_ids = _fetch_merged_member_ids(conn, entity["id"])
+        entity["merged_count"] = len(merged_ids)
+        for mid in merged_ids:
+            entity["sources"].extend(fetch_sources(conn, mid))
+        decisions.append(entity)
+
+    return {
+        "name": name,
+        "commitments": commitments,
+        "decisions": decisions,
+        "questions_raised": questions,
+        "blockers_owned": blockers,
+        "stats": {
+            "commitments": len(commitments),
+            "decisions": len(decisions),
+            "questions_raised": len(questions),
+            "blockers_owned": len(blockers),
+            "total": (len(commitments) + len(decisions)
+                      + len(questions) + len(blockers)),
+        },
+    }
+
+
+def _fetch_entities_by_actor(
+    conn: sqlite3.Connection,
+    *,
+    kind: str,
+    like: str,
+    limit: int,
+    status_clause: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"""
+        SELECT e.id FROM entities e
+        WHERE e.kind = ?
+          AND e.canonical_id IS NULL
+          AND e.primary_actor LIKE ? COLLATE NOCASE
+          {status_clause}
+        ORDER BY e.created_at DESC
+        LIMIT ?
+        """,
+        (kind, like, limit),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        entity = fetch_entity(conn, r["id"])
+        if entity is None:
+            continue
+        merged_ids = _fetch_merged_member_ids(conn, entity["id"])
+        entity["merged_count"] = len(merged_ids)
+        for mid in merged_ids:
+            entity["sources"].extend(fetch_sources(conn, mid))
+        out.append(entity)
+    return out
+
+
+def list_known_people(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Distinct people who appear in the state graph.
+
+    Walks `primary_actor` across all open canonical entities and counts
+    occurrences per name. Used to populate `/people` and the person picker.
+    Names that differ only in case are folded into the most-frequent variant.
+    """
+    rows = conn.execute(
+        """
+        SELECT primary_actor AS name, COUNT(*) AS total
+        FROM entities
+        WHERE canonical_id IS NULL
+          AND primary_actor IS NOT NULL
+          AND primary_actor <> ''
+        GROUP BY primary_actor
+        ORDER BY total DESC, name COLLATE NOCASE ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    seen_lower: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        key = (r["name"] or "").strip().lower()
+        if not key:
+            continue
+        if key in seen_lower:
+            seen_lower[key]["total"] += r["total"]
+            continue
+        item = {"name": r["name"], "total": r["total"]}
+        seen_lower[key] = item
+        out.append(item)
+    out.sort(key=lambda x: (-x["total"], x["name"].lower()))
+    return out

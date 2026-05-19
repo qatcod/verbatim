@@ -913,6 +913,74 @@ def query_stats(db: Path | None = typer.Option(None, "--db")) -> None:
     console.print(Panel(body, title="verbatim state", border_style="cyan", expand=False))
 
 
+@query_app.command("person")
+def query_person(
+    name: str = typer.Argument(..., help="Person's name (substring match, case-insensitive)."),
+    include_resolved: bool = typer.Option(False, "--all", help="Include resolved items."),
+    limit_per_kind: int = typer.Option(100, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Show everything tied to a person — commitments owed, decisions involved
+    in, questions raised, blockers owned. The single-pane answer to
+    'what's Alice on the hook for?'.
+    """
+    conn = state.open_db(db)
+    try:
+        view = store.fetch_person(
+            conn, name,
+            include_resolved=include_resolved,
+            limit_per_kind=limit_per_kind,
+        )
+    finally:
+        conn.close()
+    stats = view["stats"]
+    if stats["total"] == 0:
+        console.print(f"[dim]Nothing found for '{name}'. Try `verbatim query people` to see known names.[/dim]")
+        return
+
+    console.print(
+        f"\n[bold cyan]{name}[/bold cyan] "
+        f"[dim]· {stats['total']} items "
+        f"({stats['commitments']} commitments · {stats['decisions']} decisions · "
+        f"{stats['questions_raised']} questions · {stats['blockers_owned']} blockers)"
+        f"[/dim]\n"
+    )
+    if view["commitments"]:
+        console.print("[bold violet]Commitments owed[/bold violet]")
+        _print_entity_table(view["commitments"], kind="commitment")
+    if view["blockers_owned"]:
+        console.print("\n[bold red]Blockers owned[/bold red]")
+        _print_entity_table(view["blockers_owned"], kind="blocker")
+    if view["questions_raised"]:
+        console.print("\n[bold yellow]Questions raised[/bold yellow]")
+        _print_entity_table(view["questions_raised"], kind="open_question")
+    if view["decisions"]:
+        console.print("\n[bold cyan]Decisions involved in[/bold cyan]")
+        _print_entity_table(view["decisions"], kind="decision")
+
+
+@query_app.command("people")
+def query_people(
+    limit: int = typer.Option(200, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """List every distinct person who appears in the state graph, by frequency."""
+    conn = state.open_db(db)
+    try:
+        people = store.list_known_people(conn, limit=limit)
+    finally:
+        conn.close()
+    if not people:
+        console.print("[dim]No people recorded yet. Ingest a transcript to populate state.[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("person")
+    table.add_column("items", justify="right")
+    for p in people:
+        table.add_row(p["name"], str(p["total"]))
+    console.print(table)
+
+
 @query_app.command("cost")
 def query_cost(db: Path | None = typer.Option(None, "--db")) -> None:
     """Estimated total spend across every ingest session, broken down by model."""

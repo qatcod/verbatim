@@ -1358,6 +1358,9 @@ def _sidebar_html(*, active_filter: str, counts: dict[str, int], search_q: str =
     )
 
     activity_html = (
+        '<a href="/people" class="nav-item">'
+        f'<span class="ico">{_ICONS.get("inbox", "")}</span><span>People</span>'
+        f'<span class="count">{counts.get("people", 0)}</span></a>'
         '<a href="/sessions" class="nav-item">'
         f'<span class="ico">{_ICONS["meeting"]}</span><span>Sessions</span>'
         f'<span class="count">{counts.get("sessions", 0)}</span></a>'
@@ -1741,6 +1744,7 @@ def _all_counts(conn: sqlite3.Connection) -> dict[str, int]:
     s = state.stats(conn)
     out["sessions"] = s.get("sessions", 0)
     out["projections"] = s.get("projections_active", 0)
+    out["people"] = len(store.list_known_people(conn, limit=10000))
     return out
 
 
@@ -2156,6 +2160,122 @@ async def dashboard(request: Request) -> HTMLResponse:
     )
 
 
+# ----------------------- people + person detail -----------------------
+
+
+def _render_person_section(
+    title: str, items: list[dict[str, Any]], *, color_var: str
+) -> str:
+    if not items:
+        return ""
+    rows_html = "".join(_render_search_result(e, "") for e in items)
+    return (
+        '<div class="search-results-group">'
+        f'<h3 style="color:var({color_var})">{html.escape(title)} '
+        f'<span class="count">{len(items)}</span></h3>'
+        f"{rows_html}"
+        "</div>"
+    )
+
+
+async def people(request: Request) -> HTMLResponse:
+    """List every distinct person who appears in the state graph."""
+    conn = _open_conn()
+    try:
+        counts = _all_counts(conn)
+        items = store.list_known_people(conn, limit=300)
+    finally:
+        conn.close()
+
+    if not items:
+        list_html = (
+            '<div class="list-empty">'
+            '<div class="empty-title">No people yet</div>'
+            "<div>Ingest a transcript to surface the people who appear in it.</div>"
+            "<code>verbatim ingest path/to/meeting.txt</code>"
+            "</div>"
+        )
+    else:
+        rows = "".join(
+            f'<a href="/person/{html.escape(p["name"])}" class="result-row">'
+            f'<span class="result-icon">{_ICONS.get("inbox", "")}</span>'
+            '<div class="result-body">'
+            f'<div class="result-title">{html.escape(p["name"])}</div>'
+            f'<div class="result-sub">{p["total"]} item{"s" if p["total"] != 1 else ""}</div>'
+            "</div></a>"
+            for p in items
+        )
+        list_html = (
+            '<div class="search-results-group">'
+            f'<h3>Known people <span class="count">{len(items)}</span></h3>'
+            f"{rows}"
+            "</div>"
+        )
+
+    inner = (
+        '<main id="main-content" class="app-page">'
+        '<h1 class="page-title">People'
+        f'<span class="page-subtitle">{len(items)} known</span></h1>'
+        + list_html
+        + "</main>"
+    )
+    return HTMLResponse(
+        _shell("People", _shell_with_sidebar(inner=inner, counts=counts),
+               body_class="app-inbox")
+    )
+
+
+async def person_detail(request: Request) -> HTMLResponse:
+    """Aggregated view of one person across all four entity kinds."""
+    name = request.path_params["name"]
+    conn = _open_conn()
+    try:
+        counts = _all_counts(conn)
+        view = store.fetch_person(conn, name, include_resolved=False)
+    finally:
+        conn.close()
+
+    stats = view["stats"]
+    if stats["total"] == 0:
+        inner = (
+            '<main id="main-content" class="app-page">'
+            f'<h1 class="page-title">{html.escape(name)}'
+            '<span class="page-subtitle">no items</span></h1>'
+            '<p style="color:var(--text-3)">Nothing recorded for this person. '
+            '<a href="/people">Browse known people</a>.</p>'
+            "</main>"
+        )
+    else:
+        subtitle = (
+            f'{stats["total"]} items · '
+            f'{stats["commitments"]} commitment{"s" if stats["commitments"] != 1 else ""} · '
+            f'{stats["decisions"]} decision{"s" if stats["decisions"] != 1 else ""} · '
+            f'{stats["questions_raised"]} question{"s" if stats["questions_raised"] != 1 else ""} · '
+            f'{stats["blockers_owned"]} blocker{"s" if stats["blockers_owned"] != 1 else ""}'
+        )
+        sections = "".join([
+            _render_person_section("Commitments owed", view["commitments"],
+                                   color_var="--commit"),
+            _render_person_section("Blockers owned", view["blockers_owned"],
+                                   color_var="--blocker"),
+            _render_person_section("Questions raised", view["questions_raised"],
+                                   color_var="--question"),
+            _render_person_section("Decisions involved in", view["decisions"],
+                                   color_var="--decision"),
+        ])
+        inner = (
+            '<main id="main-content" class="app-page">'
+            f'<h1 class="page-title">{html.escape(name)}'
+            f'<span class="page-subtitle">{subtitle}</span></h1>'
+            + sections
+            + "</main>"
+        )
+    return HTMLResponse(
+        _shell(f"{name} · People", _shell_with_sidebar(inner=inner, counts=counts),
+               body_class="app-inbox")
+    )
+
+
 # ----------------------- app factory -----------------------
 
 
@@ -2171,6 +2291,8 @@ def create_app(db_path: Path | None = None) -> Starlette:
         Route("/projections", projections),
         Route("/dashboard", dashboard),
         Route("/search", search_page),
+        Route("/people", people),
+        Route("/person/{name}", person_detail),
         Route("/entity/{entity_id}", entity_detail),
     ]
     return Starlette(routes=routes)
@@ -2187,6 +2309,7 @@ _NAV_LINKS: list[tuple[str, str, str]] = [
     ("/decisions", "Decisions", "decision"),
     ("/open-questions", "Questions", "question"),
     ("/blockers", "Blockers", "blocker"),
+    ("/people", "People", "inbox"),
     ("/sessions", "Sessions", "meeting"),
     ("/projections", "Projections", "bolt"),
 ]

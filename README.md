@@ -1,8 +1,14 @@
 # Verbatim
 
+[![PyPI](https://img.shields.io/pypi/v/verbatim-ai.svg?label=verbatim-ai)](https://pypi.org/project/verbatim-ai/)
+[![Python](https://img.shields.io/pypi/pyversions/verbatim-ai.svg)](https://pypi.org/project/verbatim-ai/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/qatcod/verbatim/actions/workflows/ci.yml/badge.svg)](https://github.com/qatcod/verbatim/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/pypi/dm/verbatim-ai.svg)](https://pypi.org/project/verbatim-ai/)
+
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.9.6 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), and GitHub PR discussions. Local SQLite state graph with cross-session reconciliation. Web UI, Slack bot with interactive HITL buttons, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Cost guardrails (per-model budget, dry-run, daily caps). 303 tests, CI on 3.10/3.11/3.12. Design implementation per Claude Design handoff at `docs/design/`.
+**Status:** v0.10.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), and GitHub PR discussions. Local SQLite state graph with cross-session reconciliation. Web UI with per-person aggregated views, Slack bot with interactive HITL buttons, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Cost guardrails (per-model budget, dry-run, daily caps). 319 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
 
 ---
 
