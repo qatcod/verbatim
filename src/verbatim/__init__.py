@@ -1,3 +1,3 @@
 """Verbatim — the AI memory layer for engineering teams."""
 
-__version__ = "0.10.1"
+__version__ = "0.10.2"

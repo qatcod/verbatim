@@ -8,7 +8,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.10.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), and GitHub PR discussions. Local SQLite state graph with cross-session reconciliation. Web UI with per-person aggregated views, Slack bot with interactive HITL buttons, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Cost guardrails (per-model budget, dry-run, daily caps). 319 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
+**Status:** v0.10.2 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), GitHub PR discussions, and Google / Outlook calendar events. Local SQLite state graph with cross-session reconciliation. Web UI with per-person aggregated views, Slack bot with interactive HITL (Confirm / Dismiss / Edit modal / Reassign picker) and a full audit trail, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Cost guardrails (per-model budget, dry-run, daily caps). 362 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
 
 ---
 
@@ -28,7 +28,7 @@ Plus the non-negotiables: open source, self-hostable, bring your own LLM, every 
 
 ## What works today
 
-- **Extraction.** Meeting transcripts (`.txt`, `.vtt`, stdin), Slack workspace exports, live Slack via Web API, GitHub PR discussions. Each item carries a confidence score and the verbatim quote that produced it.
+- **Extraction.** Meeting transcripts (`.txt`, `.vtt`, stdin), Slack workspace exports, live Slack via Web API, GitHub PR discussions, and Google / Outlook calendar events. Each item carries a confidence score and the verbatim quote that produced it.
 - **Persistent state.** Extractions accumulate in a local SQLite store with cross-session reconciliation (rapidfuzz token-set, kind+actor scoped). Same commitment from a meeting and a Slack thread becomes one entity with two source quotes.
 - **Surfaces.** CLI, web UI (`verbatim serve` — three-pane Linear-style inbox, light/dark), Slack bot with `/verbatim` slash commands, Slack interactive HITL cards (Confirm / Dismiss / Edit / Reassign buttons), email digest, MCP server for Claude / Cursor / any agent.
 - **Projections.** Push commitments into Linear, GitHub Issues, or Jira. Idempotent. Source quotes carried into the issue description so every projected ticket traces back to the conversation it came from.
@@ -136,6 +136,25 @@ verbatim ingest-github qatcod/verbatim --state all --since 2026-05-01 --dry-run
 ```
 
 PAT needs `repo` scope (or `public_repo` for public-only). Fine-grained tokens need Read on "Pull requests" and "Issues" for the target repos.
+
+### Ingest calendar events (Google / Outlook)
+
+Most teams put the agenda — and often the decisions and action items — straight into the calendar event description. Verbatim ingests each event (title, organizer, attendees, description) as one extraction unit.
+
+```bash
+# Google Calendar — token needs the calendar.readonly scope
+export GOOGLE_CALENDAR_TOKEN=ya29....
+verbatim ingest-calendar google --since 2026-05-01 --dry-run
+verbatim ingest-calendar google --since 2026-05-01
+
+# Outlook / Microsoft 365 — token needs the Calendars.Read Graph scope
+export OUTLOOK_CALENDAR_TOKEN=eyJ0....
+verbatim ingest-calendar outlook --since 2026-05-01
+```
+
+The connector ingests the *event*, not the meeting *recording transcript* — pair an event with its recording is a later milestone. Events with no description and ≤1 attendee are skipped (they cost tokens for no signal); pass `--include-empty` to ingest them anyway.
+
+Access tokens are short-lived (~1 hour). Get one ad-hoc from the [Google OAuth playground](https://developers.google.com/oauthplayground) or [Graph Explorer](https://developer.microsoft.com/graph/graph-explorer); for unattended use, wire a refresh-token flow upstream and feed a fresh token per run.
 
 ### Query accumulated state
 

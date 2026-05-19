@@ -24,6 +24,7 @@ from rich.table import Table
 from . import __version__, cost, email_digest, state, store, web
 from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
+from .connectors import calendar as calendar_conn
 from .connectors import github_pr, slack_api, slack_export
 from .extractor import DEFAULT_MODEL, extract
 from .projections import github_issues as gh_issues_proj
@@ -643,6 +644,154 @@ def ingest_github_cmd(
         units, model=model, db=db, source_kind_default="github_pr",
         auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
         max_cost_usd=max_cost_usd,
+    )
+
+
+@app.command(name="ingest-calendar")
+def ingest_calendar_cmd(
+    provider: str = typer.Argument(
+        ..., help="Calendar provider: google | outlook.",
+    ),
+    token: str | None = typer.Option(
+        None, "--token",
+        help="OAuth access token. Falls back to $GOOGLE_CALENDAR_TOKEN / "
+             "$OUTLOOK_CALENDAR_TOKEN depending on provider.",
+    ),
+    calendar_id: str = typer.Option(
+        "primary", "--calendar-id",
+        help="Google calendar id to read (ignored for Outlook). Default: primary.",
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Only events on/after this date (YYYY-MM-DD)."
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Only events on/before this date (YYYY-MM-DD)."
+    ),
+    include_empty: bool = typer.Option(
+        False, "--include-empty",
+        help="Also ingest events with no description and ≤1 attendee "
+             "(skipped by default — they cost tokens for no signal).",
+    ),
+    limit: int | None = typer.Option(None, "--limit", "-n"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    auto_reconcile: bool = typer.Option(
+        False, "--auto-reconcile",
+        help="Auto-merge new entities into existing canonicals during ingest.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
+        min=50, max=100,
+    ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd",
+        help="Stop ingesting once estimated spend in USD hits this number.",
+    ),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Ingest meeting events from Google Calendar or Outlook.
+
+    Each event's title, organizer, attendees, and description/agenda become
+    one extraction session. Pass an OAuth access token with calendar read
+    scope — see `verbatim.connectors.calendar` for how to obtain one.
+    """
+    provider = provider.lower()
+    if provider not in {"google", "outlook"}:
+        err_console.print(f"[red]provider must be google|outlook, got: {provider}[/red]")
+        raise typer.Exit(code=2)
+
+    if not token:
+        env_var = (
+            "GOOGLE_CALENDAR_TOKEN" if provider == "google"
+            else "OUTLOOK_CALENDAR_TOKEN"
+        )
+        token = os.environ.get(env_var)
+    if not token:
+        env_var = (
+            "GOOGLE_CALENDAR_TOKEN" if provider == "google"
+            else "OUTLOOK_CALENDAR_TOKEN"
+        )
+        err_console.print(
+            f"[red]Calendar token required.[/red] Set ${env_var} or pass --token. "
+            "It must be an OAuth access token with calendar read scope."
+        )
+        raise typer.Exit(code=2)
+
+    since_dt = _parse_iso_date(since, "--since")
+    until_dt = _parse_iso_date(until, "--until")
+
+    units: list = []
+    try:
+        if provider == "google":
+            with calendar_conn.GoogleCalendarClient(token=token) as gcal:
+                err_console.print("[dim]Fetching Google Calendar events…[/dim]")
+                for event in gcal.iter_events(
+                    calendar_id=calendar_id, since=since_dt, until=until_dt,
+                ):
+                    if not include_empty and not event.has_content:
+                        continue
+                    units.append(event)
+                    if limit is not None and len(units) >= limit:
+                        break
+        else:
+            with calendar_conn.OutlookCalendarClient(token=token) as ocal:
+                err_console.print("[dim]Fetching Outlook calendar events…[/dim]")
+                for event in ocal.iter_events(since=since_dt, until=until_dt):
+                    if not include_empty and not event.has_content:
+                        continue
+                    units.append(event)
+                    if limit is not None and len(units) >= limit:
+                        break
+    except httpx.HTTPStatusError as e:
+        err_console.print(
+            f"[red]Calendar API error: {e.response.status_code} "
+            f"{e.response.text[:200]}[/red]"
+        )
+        raise typer.Exit(code=1) from None
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Calendar fetch failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    if not units:
+        err_console.print(
+            "[yellow]No events matched the filters.[/yellow] "
+            "Events with no description and ≤1 attendee are skipped unless "
+            "you pass --include-empty."
+        )
+        return
+
+    if dry_run:
+        _print_calendar_dry_run(units)
+        return
+
+    _run_unit_ingest(
+        units, model=model, db=db,
+        source_kind_default=f"calendar_{provider}",
+        auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+        max_cost_usd=max_cost_usd,
+    )
+
+
+def _print_calendar_dry_run(units: list) -> None:
+    table = Table(
+        show_header=True, header_style="bold cyan",
+        title="Calendar ingest plan (dry run)",
+    )
+    table.add_column("when", no_wrap=True)
+    table.add_column("event")
+    table.add_column("organizer")
+    table.add_column("attendees", justify="right")
+    for u in units:
+        table.add_row(
+            u.start.strftime("%Y-%m-%d %H:%M"),
+            u.title[:50] + ("…" if len(u.title) > 50 else ""),
+            u.organizer[:30],
+            str(len(u.attendees)),
+        )
+    console.print(table)
+    err_console.print(
+        f"[dim]{len(units)} events would be extracted. "
+        f"Estimated cost at Sonnet pricing: ~${len(units) * 0.04:.2f}[/dim]"
     )
 
 

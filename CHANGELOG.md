@@ -2,6 +2,56 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.2] — 2026-05-20
+
+### Added — Calendar ingest (Google Calendar + Outlook)
+
+`verbatim ingest-calendar google` and `verbatim ingest-calendar outlook`
+pull meeting events and ingest each one as an extraction session. Most
+teams put the agenda — and often the decisions and action items — straight
+into the event description; that text is a real extraction source.
+
+Each event becomes a unit carrying its title, organizer, attendees,
+location, and full description / body. Recurring events are expanded into
+individual instances (`singleEvents=true` for Google, `calendarView` for
+Graph). Cancelled events are skipped.
+
+- **Google Calendar** — Calendar API v3, token needs the
+  `calendar.readonly` scope. `--calendar-id` selects a non-primary
+  calendar.
+- **Outlook / Microsoft 365** — Microsoft Graph `me/calendarView`, token
+  needs the `Calendars.Read` scope. Plain-text bodies are preferred over
+  HTML; `bodyPreview` is the fallback.
+
+Auth: pass an OAuth access token via `--token` or
+`$GOOGLE_CALENDAR_TOKEN` / `$OUTLOOK_CALENDAR_TOKEN`. The connector does
+not run the OAuth dance itself — get a token from the Google OAuth
+playground or Graph Explorer for ad-hoc use, or wire a refresh-token flow
+upstream for unattended runs.
+
+Events with no description and ≤1 attendee are skipped by default — they
+spend tokens for no signal. `--include-empty` overrides. `--dry-run`
+prints the ingest plan + cost estimate. `--since` / `--until` bound the
+date window; `--auto-reconcile` merges into existing canonicals.
+
+**Scope:** this ingests the calendar *event*, not the meeting *recording
+transcript* (those live in Drive / SharePoint behind separate APIs).
+Pairing an event with its recording is a later milestone.
+
+### Tests
+- 22 new tests in `tests/test_calendar.py` covering the `CalendarEvent`
+  unit shape, `has_content` filtering, both clients' event parsing,
+  pagination (Google `pageToken`, Graph `@odata.nextLink`), cancelled-event
+  skipping, all-day events, plain-text-vs-HTML body selection, and the
+  shared ISO / RFC-3339 helpers. HTTP is mocked via `httpx.MockTransport`.
+
+### Why
+Calendar is where meetings *start*. Ingesting the agenda closes the loop
+before the meeting even happens — a decision written into an event
+description is captured the same as one spoken aloud. It's also the
+lowest-friction onboarding path: a new user with a calendar has ingestable
+data on day one, no transcript export required.
+
 ## [0.10.1] — 2026-05-20
 
 ### Added — Slack HITL Edit modal + Reassign picker
