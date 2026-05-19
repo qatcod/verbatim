@@ -2,6 +2,26 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] — 2026-05-19
+
+### Added — `verbatim watch` daemon mode
+
+Long-running ingest daemons. Set it once, forget it.
+
+- `verbatim watch slack-api [--channel X] [--interval 300]` polls Slack on an interval, ingests any new threads, auto-reconciles to dedupe. Min interval 30s to respect Slack rate limits. Auto-reconcile defaults ON in watch mode.
+- `verbatim watch github owner/repo [--state all] [--interval 900]` polls GitHub PRs.
+- Each iteration's spend is capped via `--max-cost-usd`. The loop continues to the next tick even when an iteration fails — single network blips don't kill long-running daemons.
+- `--iterations N` runs N polls and stops; default is infinite. Useful in CI and tests.
+- A small `--overlap` (default 60s for Slack, 120s for GitHub) handles clock drift and late-arriving messages — anything we pick up twice is collapsed by reconciliation.
+
+Both commands honor Ctrl-C cleanly and print a per-tick summary line.
+
+### Tests
+- 6 new tests covering the generic loop (correct iteration count, resilience to failed iterations) and CLI validation (missing tokens, bad repo format).
+
+### Why
+Public users won't remember to run `ingest-slack-api` manually every five minutes. A daemon command turns Verbatim from "thing I run when I remember" into "background service that just works." For a freebie launching in June, that's the difference between abandonment after week one and sticky daily use.
+
 ## [0.9.2] — 2026-05-19
 
 ### Added — GitHub Issues + Jira projections

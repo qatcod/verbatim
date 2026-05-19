@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +50,12 @@ app.add_typer(slack_bot_app)
 
 digest_app = typer.Typer(name="digest", help="Send state digests over various channels.")
 app.add_typer(digest_app)
+
+watch_app = typer.Typer(
+    name="watch",
+    help="Long-running ingest daemons. Poll a source on an interval until interrupted.",
+)
+app.add_typer(watch_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -1066,6 +1072,188 @@ def init_cmd(
     )
     console.print(
         "\n[dim]Documentation: https://github.com/qatcod/verbatim[/dim]"
+    )
+
+
+# ----------------------- watch (daemon mode) -----------------------
+
+
+def _watch_loop(
+    *,
+    label: str,
+    interval_seconds: int,
+    overlap_seconds: int,
+    iterations: int | None,
+    poll_once: callable,
+) -> None:
+    """Generic poll loop. `poll_once(since: datetime)` runs one iteration.
+
+    `iterations=None` runs forever (until Ctrl-C). Finite `iterations` is for
+    tests + one-shot manual checks.
+    """
+    import time
+
+    err_console.print(
+        Panel(
+            f"[bold]{label}[/bold]\n"
+            f"[dim]Polling every {interval_seconds}s "
+            f"({overlap_seconds}s overlap to handle clock drift). "
+            f"Ctrl-C to stop.[/dim]",
+            title="watch", border_style="green", expand=False,
+        )
+    )
+
+    count = 0
+    try:
+        while iterations is None or count < iterations:
+            since = datetime.now(tz=timezone.utc).replace(microsecond=0)
+            since = since - timedelta(seconds=interval_seconds + overlap_seconds)
+            tick_label = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
+            err_console.print(f"[dim][{tick_label}] polling…[/dim]")
+            try:
+                poll_once(since)
+            except Exception as e:  # noqa: BLE001
+                err_console.print(f"[red]  iteration failed: {e}[/red]")
+            count += 1
+            if iterations is None or count < iterations:
+                time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        err_console.print("\n[dim]Stopping watch loop.[/dim]")
+
+
+@watch_app.command("slack-api")
+def watch_slack_api_cmd(
+    token: str | None = typer.Option(None, "--token", envvar="SLACK_TOKEN"),
+    channel: list[str] | None = typer.Option(
+        None, "--channel", "-c",
+        help="Channels to poll (repeatable). Default: all accessible channels.",
+    ),
+    interval: int = typer.Option(
+        300, "--interval", "-i", min=30,
+        help="Seconds between polls. Default 300 (5min). Minimum 30s to respect Slack rate limits.",
+    ),
+    overlap: int = typer.Option(
+        60, "--overlap",
+        help="Look-back overlap to handle clock drift / late messages. Auto-reconcile dedupes.",
+    ),
+    min_thread_messages: int = typer.Option(3, "--min-thread-messages"),
+    include_loose: bool = typer.Option(False, "--include-loose"),
+    include_private: bool = typer.Option(False, "--include-private"),
+    auto_reconcile: bool = typer.Option(
+        True, "--auto-reconcile/--no-auto-reconcile",
+        help="Merge new entities into existing canonicals during ingest. Default ON for watch mode.",
+    ),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold", min=50, max=100,
+    ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd",
+        help="Per-iteration cost cap. Hit it, the iteration stops; loop continues next interval.",
+    ),
+    request_pause: float = typer.Option(0.5, "--request-pause"),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+    iterations: int | None = typer.Option(
+        None, "--iterations",
+        help="Run only this many iterations then stop. None = run forever. For testing.",
+    ),
+) -> None:
+    """Continuously ingest a live Slack workspace.
+
+    Polls `conversations.history` on an interval, ingesting threads that have
+    new activity since the last poll. Each iteration is bounded by --interval
+    + --overlap to handle clock drift; auto-reconcile dedupes anything we
+    accidentally pick up twice. Ideal for cron-style "always-on" inboxing.
+    """
+    if not token:
+        err_console.print("[red]Slack token required.[/red] Set $SLACK_TOKEN or pass --token.")
+        raise typer.Exit(code=2)
+
+    def poll_once(since: datetime) -> None:
+        client = slack_api.SlackClient(token=token, request_pause=request_pause)
+        skipped: list = []
+        units = list(client.iter_units(
+            channels=channel, since=since, until=None,
+            min_thread_messages=min_thread_messages,
+            include_loose_messages=include_loose,
+            include_private=include_private,
+            on_channel_error=skipped.append,
+        ))
+        if not units:
+            err_console.print("[dim]  no new units this tick[/dim]")
+            return
+        err_console.print(f"[dim]  {len(units)} unit(s) to extract[/dim]")
+        _run_slack_ingest(
+            units, model=model, db=db,
+            auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+            max_cost_usd=max_cost_usd,
+        )
+
+    _watch_loop(
+        label="watch slack-api",
+        interval_seconds=interval,
+        overlap_seconds=overlap,
+        iterations=iterations,
+        poll_once=poll_once,
+    )
+
+
+@watch_app.command("github")
+def watch_github_cmd(
+    repo: str = typer.Argument(..., help="owner/name"),
+    token: str | None = typer.Option(None, "--token", envvar="GITHUB_TOKEN"),
+    state_filter: str = typer.Option(
+        "all", "--state",
+        help="PR state filter: open | closed | all.",
+    ),
+    interval: int = typer.Option(
+        900, "--interval", "-i", min=60,
+        help="Seconds between polls. Default 900 (15min). GitHub rate limits are looser than Slack.",
+    ),
+    overlap: int = typer.Option(120, "--overlap"),
+    auto_reconcile: bool = typer.Option(True, "--auto-reconcile/--no-auto-reconcile"),
+    reconcile_threshold: int = typer.Option(
+        reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold", min=50, max=100,
+    ),
+    max_cost_usd: float | None = typer.Option(None, "--max-cost-usd"),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+    iterations: int | None = typer.Option(None, "--iterations"),
+) -> None:
+    """Continuously ingest GitHub PR discussions for a repo."""
+    if not token:
+        err_console.print("[red]GitHub token required.[/red] Set $GITHUB_TOKEN or pass --token.")
+        raise typer.Exit(code=2)
+    if "/" not in repo:
+        err_console.print(f"[red]Repo must be owner/name form, got: {repo}[/red]")
+        raise typer.Exit(code=2)
+    if state_filter not in {"open", "closed", "all"}:
+        err_console.print(f"[red]--state must be open|closed|all, got: {state_filter}[/red]")
+        raise typer.Exit(code=2)
+
+    def poll_once(since: datetime) -> None:
+        units: list = []
+        with github_pr.GitHubClient(token=token) as gh:
+            for unit in gh.iter_pull_requests(
+                repo, state=state_filter, since=since, until=None,
+            ):
+                units.append(unit)
+        if not units:
+            err_console.print("[dim]  no new PRs this tick[/dim]")
+            return
+        err_console.print(f"[dim]  {len(units)} PR(s) to extract[/dim]")
+        _run_unit_ingest(
+            units, model=model, db=db, source_kind_default="github_pr",
+            auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+            max_cost_usd=max_cost_usd,
+        )
+
+    _watch_loop(
+        label=f"watch github {repo}",
+        interval_seconds=interval,
+        overlap_seconds=overlap,
+        iterations=iterations,
+        poll_once=poll_once,
     )
 
 
