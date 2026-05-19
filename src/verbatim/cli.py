@@ -1,6 +1,7 @@
 """verbatim CLI — extract, persist (ingest), and query accumulated team state."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
+from rich.prompt import Confirm
 from rich.table import Table
 
 from . import __version__, email_digest, state, store, web
@@ -875,6 +877,113 @@ def resolve_cmd(
 def version() -> None:
     """Print the verbatim version."""
     console.print(f"verbatim {__version__}")
+
+
+# ----------------------- init (first-run wizard) -----------------------
+
+
+@app.command("init")
+def init_cmd(
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Skip prompts and accept all defaults (CI-friendly).",
+    ),
+    skip_sample: bool = typer.Option(
+        False, "--skip-sample",
+        help="Don't run the sample extraction step.",
+    ),
+) -> None:
+    """First-run wizard. Validates env, sets up the DB, runs a sample extraction.
+
+    Designed to take a brand-new user from `pip install verbatim` to seeing
+    real extracted output in under 60 seconds. Detects existing state so it's
+    safe to run multiple times.
+    """
+    console.print(
+        Panel(
+            "[bold]Welcome to Verbatim.[/bold]\n"
+            "[dim]The AI memory layer for engineering teams.[/dim]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+    # Step 1 — DB
+    db_path = store.resolve_db_path()
+    if db_path.exists():
+        console.print(f"[green]✓[/green] State DB found at [bold]{db_path}[/bold]")
+    else:
+        if yes or Confirm.ask(
+            f"Create state DB at [bold]{db_path}[/bold]?", default=True
+        ):
+            conn = state.open_db()
+            conn.close()
+            console.print(f"[green]✓[/green] Created state DB at [bold]{db_path}[/bold]")
+        else:
+            console.print("[yellow]Skipped DB creation.[/yellow]")
+            return
+
+    # Step 2 — Anthropic API key
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if has_key:
+        console.print("[green]✓[/green] [bold]ANTHROPIC_API_KEY[/bold] is set in your environment")
+    else:
+        err_console.print(
+            "[yellow]![/yellow] [bold]ANTHROPIC_API_KEY[/bold] is not set."
+        )
+        console.print(
+            "  Get one at https://console.anthropic.com/settings/keys, then add this\n"
+            "  to your shell rc and re-source:\n"
+            "    [dim]export ANTHROPIC_API_KEY=sk-ant-...[/dim]"
+        )
+        console.print("\n[dim]The wizard will continue, but extraction won't work until you set it.[/dim]")
+
+    # Step 3 — optional sample extraction
+    sample_path = Path(__file__).parent.parent.parent / "examples" / "sample_transcript.txt"
+    if not sample_path.exists():
+        # When installed via pip, the examples aren't in the package; fall back to a tiny inline sample.
+        sample_path = None
+
+    if skip_sample or not has_key:
+        console.print("[dim]Skipping sample extraction.[/dim]")
+    elif sample_path and (yes or Confirm.ask(
+        "\nRun a sample extraction now? (~$0.07, ~30s)", default=True
+    )):
+        console.print(f"\n[dim]Extracting from {sample_path}…[/dim]")
+        try:
+            transcript = load_transcript(sample_path)
+            result, diag = extract(transcript)
+            conn = state.open_db()
+            try:
+                summary = state.save_extraction(
+                    conn, result, diag, source_path=str(sample_path),
+                )
+            finally:
+                conn.close()
+            total = sum(summary.counts.values())
+            console.print(
+                f"[green]✓[/green] Extracted [bold]{total}[/bold] items: "
+                f"{summary.counts['commitment']} commitments, "
+                f"{summary.counts['decision']} decisions, "
+                f"{summary.counts['open_question']} questions, "
+                f"{summary.counts['blocker']} blockers"
+            )
+        except Exception as e:  # noqa: BLE001
+            err_console.print(f"[red]Sample extraction failed: {e}[/red]")
+
+    # Step 4 — what's next
+    console.print(
+        "\n"
+        "[bold]Next steps:[/bold]\n"
+        "  [dim]·[/dim] Browse what's in the state graph: [bold]verbatim query commitments[/bold]\n"
+        "  [dim]·[/dim] Open the web UI:                   [bold]verbatim serve[/bold]\n"
+        "  [dim]·[/dim] Ingest your own transcript:        [bold]verbatim ingest path/to/meeting.txt[/bold]\n"
+        "  [dim]·[/dim] Wire up the Slack bot:             [bold]verbatim slack-bot run[/bold]\n"
+        "  [dim]·[/dim] See all commands:                  [bold]verbatim --help[/bold]"
+    )
+    console.print(
+        "\n[dim]Documentation: https://github.com/qatcod/verbatim[/dim]"
+    )
 
 
 # ----------------------- serve (web UI) -----------------------

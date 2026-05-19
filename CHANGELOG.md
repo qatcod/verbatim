@@ -2,6 +2,36 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-05-19
+
+### Added — `verbatim init` first-run wizard
+
+A first-run experience designed to take a new user from `pip install verbatim` to seeing real extracted output in under 60 seconds.
+
+```
+$ verbatim init
+Welcome to Verbatim. The AI memory layer for engineering teams.
+✓ Created state DB at ~/.verbatim/state.db
+✓ ANTHROPIC_API_KEY is set in your environment
+Run a sample extraction now? (~$0.07, ~30s) [Y/n]: y
+✓ Extracted 5 items: 2 commitments, 2 decisions, 1 questions, 0 blockers
+
+Next steps:
+  · Browse what's in the state graph: verbatim query commitments
+  · Open the web UI:                   verbatim serve
+  · Ingest your own transcript:        verbatim ingest path/to/meeting.txt
+  · Wire up the Slack bot:             verbatim slack-bot run
+```
+
+Flags:
+- `--yes` / `-y`: accept all defaults (CI-friendly, idempotent re-runs)
+- `--skip-sample`: don't run the sample extraction step
+
+The wizard never writes API keys to disk — it only verifies that `ANTHROPIC_API_KEY` is set in the environment and points users at the right URL to get one if it isn't. Re-running is safe: the DB-creation step is idempotent.
+
+### Why
+Before v0.9, the first-run path was "read the README, pick from 11 CLI commands, hope you guessed right." For a freebie launching in June where strangers from HN will arrive with no context, the first 60 seconds dominate the conversion rate. The wizard collapses that path into one command.
+
 ## [0.8.1] — 2026-05-19
 
 ### Added — OSS hygiene before public launch
