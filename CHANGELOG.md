@@ -2,6 +2,21 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] — 2026-05-19
+
+### Added — cost guardrails
+
+LLM spend is now visible and capped.
+
+- New `cost.py` module: `estimate_cost(model, in_tokens, out_tokens)` mapping each Claude model to its public Anthropic pricing. Self-hosted users can override per-model rates via the `VERBATIM_PRICING` env var (`claude-sonnet-4-6:2.5/12,claude-opus-4-7:12/60`).
+- New `--max-cost-usd` flag on every batch-ingest command (`ingest-slack`, `ingest-slack-api`, `ingest-github`). When set, the run aborts once cumulative cost crosses the cap and reports how many units were skipped.
+- Running cost shown in each ingest's summary panel (`cost: $0.0432`).
+- New `verbatim query cost` command — table of spend by model with totals + token counts.
+- `verbatim query stats` now includes total spend and token counts.
+
+### Why
+Public users — especially the privacy/cost-skeptical engineering audience we'll get from Hacker News — are afraid of opaque LLM bills. Visibility + the ability to cap spend are the two biggest trust-builders before launch.
+
 ## [0.9.0] — 2026-05-19
 
 ### Added — `verbatim init` first-run wizard

@@ -21,7 +21,7 @@ from rich.progress import (
 from rich.prompt import Confirm
 from rich.table import Table
 
-from . import __version__, email_digest, state, store, web
+from . import __version__, cost, email_digest, state, store, web
 from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
 from .connectors import github_pr, slack_api, slack_export
@@ -227,6 +227,10 @@ def ingest_slack_cmd(
         min=50, max=100,
         help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
     ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd",
+        help="Stop ingesting once estimated spend in USD hits this number.",
+    ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
@@ -270,6 +274,7 @@ def ingest_slack_cmd(
     _run_slack_ingest(
         units, model=model, db=db,
         auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+        max_cost_usd=max_cost_usd,
     )
 
 
@@ -302,6 +307,7 @@ def _run_slack_ingest(
     db: Path | None,
     auto_reconcile: bool = False,
     reconcile_threshold: int = reconcile_lib.DEFAULT_THRESHOLD,
+    max_cost_usd: float | None = None,
 ) -> None:
     conn = state.open_db(db)
     total_counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
@@ -309,6 +315,8 @@ def _run_slack_ingest(
     total_in_tokens = 0
     total_out_tokens = 0
     total_reconciled = 0
+    run_cost = 0.0
+    cost_aborted = False
 
     progress = Progress(
         SpinnerColumn(),
@@ -344,15 +352,27 @@ def _run_slack_ingest(
                     total_in_tokens += diag.input_tokens
                     total_out_tokens += diag.output_tokens
                     total_reconciled += summary.reconcile_links
+                    run_cost += cost.estimate_cost(
+                        diag.model, diag.input_tokens, diag.output_tokens
+                    )
                 except Exception as e:  # noqa: BLE001
                     failed += 1
                     err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
                 progress.advance(task)
+
+                if max_cost_usd is not None and run_cost >= max_cost_usd:
+                    err_console.print(
+                        f"[yellow]Budget cap hit (${run_cost:.4f} ≥ ${max_cost_usd:.4f}). Stopping.[/yellow]"
+                    )
+                    cost_aborted = True
+                    break
     finally:
         conn.close()
 
     total = sum(total_counts.values())
     recon = f"  ·  reconciled: {total_reconciled}" if auto_reconcile else ""
+    cost_line = f"  ·  cost: ${run_cost:.4f}" if run_cost > 0 else ""
+    aborted_note = "  ·  [yellow]budget capped[/yellow]" if cost_aborted else ""
     body = (
         f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
         f"{total_counts['commitment']} commitments · "
@@ -360,7 +380,7 @@ def _run_slack_ingest(
         f"{total_counts['open_question']} open questions · "
         f"{total_counts['blocker']} blockers\n"
         f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
-        f"failed: {failed}{recon}[/dim]"
+        f"failed: {failed}{recon}{cost_line}{aborted_note}[/dim]"
     )
     err_console.print(Panel(body, title="slack ingest complete", border_style="green", expand=False))
 
@@ -423,6 +443,10 @@ def ingest_slack_api_cmd(
         reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
         min=50, max=100,
         help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
+    ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd",
+        help="Stop ingesting once estimated spend in USD hits this number.",
     ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
@@ -510,6 +534,7 @@ def ingest_slack_api_cmd(
     _run_slack_ingest(
         units, model=model, db=db,
         auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+        max_cost_usd=max_cost_usd,
     )
 
 
@@ -553,6 +578,10 @@ def ingest_github_cmd(
         reconcile_lib.DEFAULT_THRESHOLD, "--reconcile-threshold",
         min=50, max=100,
         help=f"Similarity threshold for --auto-reconcile (default {reconcile_lib.DEFAULT_THRESHOLD}).",
+    ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd",
+        help="Stop ingesting once estimated spend in USD hits this number.",
     ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
@@ -605,6 +634,7 @@ def ingest_github_cmd(
     _run_unit_ingest(
         units, model=model, db=db, source_kind_default="github_pr",
         auto_reconcile=auto_reconcile, reconcile_threshold=reconcile_threshold,
+        max_cost_usd=max_cost_usd,
     )
 
 
@@ -638,6 +668,7 @@ def _run_unit_ingest(
     source_kind_default: str,
     auto_reconcile: bool = False,
     reconcile_threshold: int = reconcile_lib.DEFAULT_THRESHOLD,
+    max_cost_usd: float | None = None,
 ) -> None:
     """Generic ingest loop usable for any unit type with .transcript / .source_label / .source_kind."""
     conn = state.open_db(db)
@@ -646,6 +677,8 @@ def _run_unit_ingest(
     total_in_tokens = 0
     total_out_tokens = 0
     total_reconciled = 0
+    run_cost = 0.0
+    cost_aborted = False
 
     progress = Progress(
         SpinnerColumn(),
@@ -675,15 +708,27 @@ def _run_unit_ingest(
                     total_in_tokens += diag.input_tokens
                     total_out_tokens += diag.output_tokens
                     total_reconciled += summary.reconcile_links
+                    run_cost += cost.estimate_cost(
+                        diag.model, diag.input_tokens, diag.output_tokens
+                    )
                 except Exception as e:  # noqa: BLE001
                     failed += 1
                     err_console.print(f"[red]  failed {unit.source_label}: {e}[/red]")
                 progress.advance(task)
+
+                if max_cost_usd is not None and run_cost >= max_cost_usd:
+                    err_console.print(
+                        f"[yellow]Budget cap hit (${run_cost:.4f} ≥ ${max_cost_usd:.4f}). Stopping.[/yellow]"
+                    )
+                    cost_aborted = True
+                    break
     finally:
         conn.close()
 
     total = sum(total_counts.values())
     recon = f"  ·  reconciled: {total_reconciled}" if auto_reconcile else ""
+    cost_line = f"  ·  cost: ${run_cost:.4f}" if run_cost > 0 else ""
+    aborted_note = "  ·  [yellow]budget capped[/yellow]" if cost_aborted else ""
     body = (
         f"[bold]Extracted {total} items across {len(units) - failed}/{len(units)} units[/bold]\n"
         f"{total_counts['commitment']} commitments · "
@@ -691,7 +736,7 @@ def _run_unit_ingest(
         f"{total_counts['open_question']} open questions · "
         f"{total_counts['blocker']} blockers\n"
         f"[dim]tokens: {total_in_tokens:,} in / {total_out_tokens:,} out  ·  "
-        f"failed: {failed}{recon}[/dim]"
+        f"failed: {failed}{recon}{cost_line}{aborted_note}[/dim]"
     )
     err_console.print(Panel(body, title="ingest complete", border_style="green", expand=False))
 
@@ -840,16 +885,52 @@ def query_stats(db: Path | None = typer.Option(None, "--db")) -> None:
     conn = state.open_db(db)
     try:
         s = state.stats(conn)
+        total_spend = cost.total_spend(conn)
+        in_tok, out_tok = cost.total_tokens(conn)
     finally:
         conn.close()
+    cost_line = (
+        f"\n[bold]${total_spend:.4f}[/bold] spent · "
+        f"[dim]{in_tok:,} in / {out_tok:,} out tokens[/dim]"
+        if total_spend > 0 else ""
+    )
     body = (
         f"[bold]{s['sessions']}[/bold] sessions ingested\n"
         f"[bold]{s['commitments_open']}[/bold] open commitments · "
         f"[bold]{s['decisions_open']}[/bold] decisions · "
         f"[bold]{s['open_questions_open']}[/bold] open questions · "
         f"[bold]{s['blockers_open']}[/bold] blockers"
+        f"{cost_line}"
     )
     console.print(Panel(body, title="verbatim state", border_style="cyan", expand=False))
+
+
+@query_app.command("cost")
+def query_cost(db: Path | None = typer.Option(None, "--db")) -> None:
+    """Estimated total spend across every ingest session, broken down by model."""
+    conn = state.open_db(db)
+    try:
+        total = cost.total_spend(conn)
+        breakdown = cost.spend_breakdown(conn)
+        in_tok, out_tok = cost.total_tokens(conn)
+    finally:
+        conn.close()
+    if total == 0:
+        console.print(
+            "[dim]No spend recorded yet — try `verbatim ingest examples/sample_transcript.txt`.[/dim]"
+        )
+        return
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("model")
+    table.add_column("spend", justify="right")
+    for model_name, spend in breakdown.items():
+        table.add_row(model_name, f"${spend:.4f}")
+    table.add_row("[bold]total[/bold]", f"[bold]${total:.4f}[/bold]")
+    console.print(table)
+    console.print(
+        f"[dim]{in_tok:,} input tokens · {out_tok:,} output tokens. "
+        f"Prices: see `verbatim.cost.PRICING` or override via $VERBATIM_PRICING.[/dim]"
+    )
 
 
 @app.command(name="resolve")
