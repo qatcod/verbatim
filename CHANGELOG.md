@@ -2,6 +2,43 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] — 2026-05-19
+
+### Added — local LLM via Ollama
+
+Verbatim now supports any Ollama-served model via its OpenAI-compatible
+endpoint. No API key, no data leaving the host, $0 in cost.
+
+Use it three ways:
+- Per-call: `verbatim ingest meeting.txt --model ollama:llama3.1:8b`
+- Default model: `export VERBATIM_MODEL=ollama:qwen2.5:7b`
+- Backend toggle: `export VERBATIM_LLM_BACKEND=ollama` (uses `$VERBATIM_MODEL` as-is)
+
+Ollama host defaults to `http://localhost:11434`; override with `$OLLAMA_HOST`.
+
+### Refactored — pluggable LLM backend
+
+`extractor.py` now dispatches between an Anthropic backend (`_extract_anthropic`) and an Ollama backend (`_extract_ollama`) at call time. Both produce the same `(ExtractionResult, ExtractionDiagnostics)` shape so every downstream caller — CLI, daemon, MCP server, web UI — is backend-agnostic. The `extract()` public function is unchanged; old callers keep working.
+
+### Tool-use compatibility
+
+Ollama models must support tool calling for the extractor to work. Known-good
+as of 2026-05: `llama3.1:8b`, `llama3.1:70b`, `qwen2.5:7b`, `qwen2.5:14b`,
+`mistral-small3.1:24b`. When a model returns text instead of a tool call,
+the extractor raises with a clear hint pointing at known-good alternatives.
+
+### Cost
+Ollama models cost $0/M tokens. `cost.estimate_cost("ollama:...", ...)` returns 0.0 by virtue of being absent from `DEFAULT_PRICING` — the `verbatim query cost` table will just not include local models in its rollup.
+
+### Tests
+- 11 new tests in `tests/test_ollama_backend.py`: backend selection logic (model prefix + env var), happy-path tool call with correct token accounting, dispatch routing, error paths (no tool call, malformed JSON, HTTP failure), dict-shaped arguments tolerance, zero-cost confirmation.
+
+### Why
+Local LLM doubles the addressable user base — privacy-sensitive teams that
+can't ship transcripts to Anthropic, and cost-sensitive teams who'd rather
+run llama3.1 on a GPU they already own. Hot path for HN comments along the
+lines of "I love it but I can't use it because of \[compliance / cost / air-gap\]."
+
 ## [0.9.3] — 2026-05-19
 
 ### Added — `verbatim watch` daemon mode
