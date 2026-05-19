@@ -193,7 +193,8 @@ def test_slack_list_view_shows_compact_merged_pill(db_with_merged: Path) -> None
 
 
 def test_dashboard_renders_activity_feed(client: TestClient) -> None:
-    r = client.get("/")
+    """v0.8: dashboard moved to /dashboard. / is the inbox."""
+    r = client.get("/dashboard")
     assert "activity-feed" in r.text
     assert "activity-item" in r.text
     assert "Ingested" in r.text  # text from our activity feed renderer
@@ -229,8 +230,8 @@ def test_main_has_skip_target_id(client: TestClient) -> None:
 
 def test_active_nav_link_has_aria_current(client: TestClient) -> None:
     r = client.get("/commitments")
-    # The /commitments anchor should have both class="active" and aria-current="page"
-    assert 'href="/commitments" class="active" aria-current="page"' in r.text
+    # v0.8 sidebar uses "nav-item active" as the class
+    assert 'href="/commitments" class="nav-item active" aria-current="page"' in r.text
 
 
 def test_search_input_has_aria_label(client: TestClient) -> None:

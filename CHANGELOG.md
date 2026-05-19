@@ -2,6 +2,44 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-05-19
+
+Implementation of the Claude Design handoff. The web UI moves from a one-column dashboard to a Linear-style three-pane inbox shell. The original prototype is preserved at `docs/design/verbatim.html` for reference.
+
+### Added — Three-pane inbox shell
+
+`/` is now the Inbox: `[ sidebar 232px ] [ list pane 480px ] [ detail pane 1fr ]`. Selection happens via query param (`/?id=<entity_id>`), so URLs are linkable and the back button just works.
+
+- **Sidebar**: brand mark + lowercase "verbatim" wordmark + workspace badge + chevron, persistent search box with `/` shortcut and ⌘K-style keycap, grouped nav (Workspace · Activity), animated ingestion pulse in the footer, theme toggle.
+- **List pane**: title + count + filter tabs (All · Commitments · Decisions · Questions · Blockers, each with its colored type-dot and count), toolbar with status chip, scrollable list of rows.
+- **List rows**: type-dot + `VRB-<short8>` mono ID, summary, owner avatar (deterministic-colored initials), due date with overdue/soon states, **inline italic quote underneath with attribution**, footer with source kind + channel + relative timestamp + confidence pill.
+- **Detail pane**: breadcrumb, eyebrow with type dot, large entity title, **violet quote-hero card** with "verbatim" lock tag (the page-defining element — every other piece is metadata), additional sources block if the entity has merged siblings, right rail with Properties + Evidence (confidence bar + source).
+
+### Added — Brand + typography
+
+- Inter (weights 400/450/500/550/600/700) + JetBrains Mono via Google Fonts, with stylistic sets `cv11 ss01 ss03 cv02` enabled for cleaner letterforms.
+- Per-kind colors: commitment violet `#a78bfa`, decision teal `#5eead4`, question amber `#fbbf24`, blocker rose `#fb7185`.
+- Display ID format is now `VRB-<short8>` across every surface that shows an ID in the UI (rows, breadcrumbs, side rows).
+- Deterministic avatar colors hashed from the actor name across {purple, teal, rose, amber, blue, slate} with dark + light palettes.
+
+### Added — Light theme + persistence
+
+Full light theme via `[data-theme="light"]` with `--accent: #7c3aed` (AA-balanced violet) and remapped per-kind colors. Theme persists in `localStorage` with a 4-line pre-paint script (no FOUC). Toggle button lives in the sidebar footer.
+
+### Added — Legacy view preserved
+
+The pre-v0.8 dashboard (stats + activity feed) moves to `/dashboard` and continues to work. Search at `/search` and entity-detail at `/entity/{id}` work as standalone pages, both rendered in the new design system.
+
+### Where the design doesn't apply
+
+The handoff includes a Slack thread reconstruction with a bot-reply mock under the quote hero. We don't actually have Slack message context in our DB (we have `source_label` + the single verbatim quote, not the surrounding messages), so that section is omitted rather than faked. It will return as a real feature when we ingest enough surrounding context to render it honestly.
+
+### Tests
+- 247 total (+19 new in `tests/test_design.py`). New tests pin the three-pane shell, quote-hero presence, type-dot colors per kind, VRB-short-id format, theme toggle + persistence, font loading, brand wordmark, breadcrumb, right-rail blocks, viewport meta. Existing 16 web tests + consistency tests updated for the new structure.
+
+### Docs
+- `docs/design/` now contains the original Claude Design handoff: `verbatim.html`, `bundle.jsx`, `README.md`, and `chat-original.md`. Future contributors should consult these before changing the visual system.
+
 ## [0.7.1] — 2026-05-19
 
 A polish pass — no single inconsistency across surfaces.

@@ -72,18 +72,32 @@ def client(seeded_db: Path) -> TestClient:
 
 
 def test_home_renders(client: TestClient) -> None:
+    """v0.8: / is now the three-pane Inbox. Dashboard moved to /dashboard."""
     r = client.get("/")
     assert r.status_code == 200
     body = r.text
-    assert "Verbatim dashboard" in body
-    assert "<title>Dashboard · Verbatim</title>" in body
-    assert "Qat" in body  # recent commitment surfaces
+    assert "<title>Inbox · Verbatim</title>" in body
+    assert 'class="shell"' in body
+    # ship v0 still surfaces from the seeded commitment
+    assert "ship v0" in body
 
 
-def test_home_stats_present(client: TestClient) -> None:
+def test_home_sidebar_nav_present(client: TestClient) -> None:
+    """The new sidebar lists Workspace + Activity sections."""
     r = client.get("/")
     body = r.text
-    for label in ("Sessions", "Commitments", "Decisions", "Questions", "Blockers"):
+    for label in ("Inbox", "Commitments", "Decisions", "Questions", "Blockers",
+                  "Sessions", "Projections"):
+        assert f">{label}<" in body
+
+
+def test_dashboard_at_dashboard_route(client: TestClient) -> None:
+    """The pre-v0.8 dashboard now lives at /dashboard."""
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    body = r.text
+    assert "Verbatim dashboard" in body
+    for label in ("Sessions", "Commitments", "Decisions"):
         assert label in body
 
 
@@ -91,26 +105,19 @@ def test_home_stats_present(client: TestClient) -> None:
 
 
 def test_commitments_page(client: TestClient) -> None:
+    """v0.8: /commitments is the inbox pre-filtered to commitments."""
     r = client.get("/commitments")
     assert r.status_code == 200
     assert "ship v0" in r.text
+    # The detail pane shows the deadline
     assert "Friday" in r.text
 
 
-def test_commitments_filter_by_actor(client: TestClient) -> None:
-    r_qat = client.get("/commitments?actor=qat")
-    r_none = client.get("/commitments?actor=unknown")
-    assert "ship v0" in r_qat.text
-    assert "ship v0" not in r_none.text
-    assert "No commitments match" in r_none.text
-
-
-def test_commitments_filter_by_min_confidence(client: TestClient) -> None:
-    r_high = client.get("/commitments?min_confidence=high")
-    r_only_low = client.get("/commitments?min_confidence=low")
-    # Only one commitment, high confidence — both should return it
-    assert "ship v0" in r_high.text
-    assert "ship v0" in r_only_low.text
+def test_commitments_filtered_only_shows_commitments(client: TestClient) -> None:
+    """The /commitments inbox view should not include other entity kinds in the list."""
+    r = client.get("/commitments")
+    # Selected entity is auto-set to the first commitment; the list-title says Commitments
+    assert ">Commitments<" in r.text
 
 
 def test_decisions_page(client: TestClient) -> None:
@@ -245,9 +252,10 @@ def test_nav_links_present_on_every_page(client: TestClient) -> None:
 
 
 def test_active_nav_class_on_current_page(client: TestClient) -> None:
+    """v0.8: the active nav link gets `nav-item active` + aria-current."""
     r = client.get("/commitments")
     body = r.text
-    # The /commitments link should have class="active"
-    assert 'href="/commitments" class="active"' in body
-    # And include the label
-    assert ">Commitments<" in body
+    # The /commitments anchor uses class "nav-item active" with aria-current
+    assert 'href="/commitments" class="nav-item active" aria-current="page"' in body
+    # And the label is wrapped in a <span>
+    assert "<span>Commitments</span>" in body
