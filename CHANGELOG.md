@@ -2,6 +2,31 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] — 2026-05-19
+
+### Added — GitHub Issues + Jira projections
+
+Two more projection targets, mirroring the v0.4 Linear projection's interface.
+
+**GitHub Issues** (`verbatim project github`):
+- `projections/github_issues.py` — REST API client (POST `/repos/{owner}/{repo}/issues`, PATCH for close), `GitHubIssuesClient` / `plan_projection` / `execute_projection` / `deactivate_projection` matching the Linear shape.
+- Auth via `$GITHUB_TOKEN` (same token used by `ingest-github`).
+- Maps `commitment.actor` → `issue.assignees[0]` (best-effort GitHub login), labels include `verbatim` plus any from `--label`.
+- `verbatim project github --repo owner/name [--label X] [--min-confidence c] [--dry-run]`.
+
+**Jira** (`verbatim project jira`):
+- `projections/jira.py` — Atlassian Cloud REST v3 client with Basic auth (email + API token), minimal Atlassian Document Format builder for descriptions, transition-based close (looks up "Done" / "Closed" / "Resolved" by name).
+- Auth via `$JIRA_EMAIL` + `$JIRA_API_TOKEN`.
+- `verbatim project jira --site https://yourco.atlassian.net --project ENG [--issuetype Task] [--label X] [--dry-run]`.
+
+Both share the same `projections` table — `verbatim project status --target github_issue` / `--target jira_issue` lists what's where. `verbatim unproject <id> --close-external` works for all three target kinds (Linear, GitHub, Jira).
+
+### Tests
+- 13 new tests in `tests/test_github_jira_projections.py`: constructor validation, idempotency, non-canonical skip, dry-run plan vs execute split, deactivate-with-close-external (PATCH for GitHub, transition lookup for Jira), ADF document structure.
+
+### Why
+Linear is the niche pick; GitHub Issues is universal and Jira is the corporate default. Adding both before the June public launch triples the addressable users without changing the data model — the projections table already supports arbitrary `target_kind`.
+
 ## [0.9.1] — 2026-05-19
 
 ### Added — cost guardrails

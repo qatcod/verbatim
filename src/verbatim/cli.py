@@ -26,6 +26,8 @@ from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
 from .connectors import github_pr, slack_api, slack_export
 from .extractor import DEFAULT_MODEL, extract
+from .projections import github_issues as gh_issues_proj
+from .projections import jira as jira_proj
 from .projections import linear as linear_proj
 from .renderers import to_json, to_markdown
 from .transcripts import load_transcript
@@ -1384,6 +1386,198 @@ def project_linear_cmd(
         f"[dim]skipped (already-projected/merged): {len(skipped)}  ·  team: {team_match['name']}[/dim]"
     )
     err_console.print(Panel(body, title="linear projection complete", border_style="green", expand=False))
+
+
+@project_app.command("github")
+def project_github_cmd(
+    repo: str = typer.Option(
+        ..., "--repo",
+        help="Target GitHub repo in owner/name form (e.g. qatcod/verbatim).",
+    ),
+    token: str | None = typer.Option(
+        None, "--token", envvar="GITHUB_TOKEN",
+        help="GitHub PAT. Reads $GITHUB_TOKEN if not passed.",
+    ),
+    label: list[str] | None = typer.Option(
+        None, "--label",
+        help="Extra label(s) to apply to each issue (repeatable). 'verbatim' is always added.",
+    ),
+    min_confidence: str = typer.Option(
+        "high", "--min-confidence", "-c",
+        help="Only project commitments at this confidence or higher. Default: high.",
+    ),
+    limit: int | None = typer.Option(None, "--limit", "-n"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Push pending Verbatim commitments out as GitHub issues. Idempotent."""
+    if not token:
+        err_console.print("[red]GitHub token required.[/red] Set $GITHUB_TOKEN or pass --token.")
+        raise typer.Exit(code=2)
+    if "/" not in repo:
+        err_console.print(f"[red]Repo must be owner/name form, got: {repo}[/red]")
+        raise typer.Exit(code=2)
+
+    conn = state.open_db(db)
+    try:
+        commits = state.list_commitments(conn, min_confidence=min_confidence, limit=limit or 200)
+        plans = [gh_issues_proj.plan_projection(conn, c, extra_labels=label) for c in commits]
+        pending = [p for p in plans if not p.skip_reason]
+        skipped = [p for p in plans if p.skip_reason]
+        if limit is not None:
+            pending = pending[:limit]
+        if not pending:
+            err_console.print(
+                f"[yellow]No commitments to project.[/yellow] "
+                f"({len(skipped)} skipped — already projected, merged, or below confidence threshold)"
+            )
+            return
+
+        if dry_run:
+            table = Table(
+                show_header=True, header_style="bold cyan",
+                title=f"GitHub Issues projection plan (dry run) — {repo}",
+            )
+            table.add_column("entity")
+            table.add_column("title")
+            table.add_column("labels")
+            for p in pending:
+                table.add_row(
+                    p.entity["id"][:8] + "…",
+                    p.draft.title[:60] + ("…" if len(p.draft.title) > 60 else ""),
+                    ", ".join(p.draft.labels),
+                )
+            console.print(table)
+            err_console.print(f"[dim]{len(pending)} issues would be created; {len(skipped)} skipped[/dim]")
+            return
+
+        try:
+            client = gh_issues_proj.GitHubIssuesClient(token=token)
+        except ValueError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2) from None
+
+        created: list[dict[str, Any]] = []
+        with client:
+            for plan in pending:
+                try:
+                    info = gh_issues_proj.execute_projection(conn, client, plan, repo=repo)
+                    created.append(info)
+                    err_console.print(
+                        f"[green]✓[/green] #{info.get('number')}: {plan.draft.title[:60]}"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    err_console.print(
+                        f"[red]  failed for entity {plan.entity['id'][:8]}: {e}[/red]"
+                    )
+    finally:
+        conn.close()
+
+    body = (
+        f"[bold]Created {len(created)} GitHub issue(s)[/bold] in [cyan]{repo}[/cyan]\n"
+        f"[dim]skipped (already-projected/merged/low-confidence): {len(skipped)}[/dim]"
+    )
+    err_console.print(Panel(body, title="github projection complete", border_style="green", expand=False))
+
+
+@project_app.command("jira")
+def project_jira_cmd(
+    site: str = typer.Option(
+        ..., "--site",
+        help="Atlassian site (e.g. https://yourco.atlassian.net).",
+    ),
+    project_key: str = typer.Option(
+        ..., "--project",
+        help="Jira project key (e.g. ENG).",
+    ),
+    email: str | None = typer.Option(
+        None, "--email", envvar="JIRA_EMAIL",
+        help="Atlassian account email. Reads $JIRA_EMAIL.",
+    ),
+    api_token: str | None = typer.Option(
+        None, "--api-token", envvar="JIRA_API_TOKEN",
+        help="Atlassian API token. Reads $JIRA_API_TOKEN.",
+    ),
+    issuetype: str = typer.Option("Task", "--issuetype"),
+    label: list[str] | None = typer.Option(None, "--label"),
+    min_confidence: str = typer.Option("high", "--min-confidence", "-c"),
+    limit: int | None = typer.Option(None, "--limit", "-n"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Push pending Verbatim commitments out as Jira issues. Idempotent."""
+    if not email or not api_token:
+        err_console.print(
+            "[red]Jira email + API token required.[/red] Set $JIRA_EMAIL and $JIRA_API_TOKEN, "
+            "or pass --email and --api-token."
+        )
+        raise typer.Exit(code=2)
+
+    conn = state.open_db(db)
+    try:
+        commits = state.list_commitments(conn, min_confidence=min_confidence, limit=limit or 200)
+        plans = [jira_proj.plan_projection(conn, c, extra_labels=label) for c in commits]
+        pending = [p for p in plans if not p.skip_reason]
+        skipped = [p for p in plans if p.skip_reason]
+        if limit is not None:
+            pending = pending[:limit]
+        if not pending:
+            err_console.print(
+                f"[yellow]No commitments to project.[/yellow] "
+                f"({len(skipped)} skipped — already projected or merged)"
+            )
+            return
+
+        if dry_run:
+            table = Table(
+                show_header=True, header_style="bold cyan",
+                title=f"Jira projection plan (dry run) — project {project_key}",
+            )
+            table.add_column("entity")
+            table.add_column("summary")
+            table.add_column("issuetype")
+            table.add_column("labels")
+            for p in pending:
+                table.add_row(
+                    p.entity["id"][:8] + "…",
+                    p.draft.summary[:60] + ("…" if len(p.draft.summary) > 60 else ""),
+                    issuetype,
+                    ", ".join(p.draft.labels),
+                )
+            console.print(table)
+            err_console.print(f"[dim]{len(pending)} issues would be created; {len(skipped)} skipped[/dim]")
+            return
+
+        try:
+            client = jira_proj.JiraClient(site=site, email=email, api_token=api_token)
+        except ValueError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2) from None
+
+        created: list[dict[str, Any]] = []
+        with client:
+            for plan in pending:
+                try:
+                    info = jira_proj.execute_projection(
+                        conn, client, plan,
+                        project_key=project_key, issuetype=issuetype,
+                    )
+                    created.append(info)
+                    err_console.print(
+                        f"[green]✓[/green] {info.get('key')}: {plan.draft.summary[:60]}"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    err_console.print(
+                        f"[red]  failed for entity {plan.entity['id'][:8]}: {e}[/red]"
+                    )
+    finally:
+        conn.close()
+
+    body = (
+        f"[bold]Created {len(created)} Jira issue(s)[/bold] in [cyan]{project_key}[/cyan]\n"
+        f"[dim]skipped (already-projected/merged/low-confidence): {len(skipped)}[/dim]"
+    )
+    err_console.print(Panel(body, title="jira projection complete", border_style="green", expand=False))
 
 
 @project_app.command("status")
