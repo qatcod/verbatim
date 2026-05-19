@@ -2,6 +2,53 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.5] — 2026-05-19
+
+### Added — Slack interactive HITL
+
+The Slack bot now posts rich Block Kit "extraction cards" with four action
+buttons — **Confirm**, **Dismiss**, **Edit**, **Reassign** — so teams can
+triage commitments / decisions / questions / blockers without leaving Slack.
+A click flows through Socket Mode → `_handle_interactive` → `dispatch_action`,
+which mutates entity status in the SQLite store and replies via the
+interaction's `response_url` (with an ephemeral fallback if `response_url`
+isn't usable).
+
+Confirm/Dismiss are live and persist (`status` → `confirmed` / `dismissed`).
+Edit and Reassign return "not yet implemented" placeholders so the UI is
+discoverable today and the persistence can ship next without changing the
+button surface.
+
+### Added — `verbatim slack-bot post-card <channel> <entity_id>`
+
+A CLI command for posting a card by entity ID (prefix-resolved) into a
+channel — useful for demos, retroactive triage, and the daemon-mode workflow
+where extractions surface in Slack on a schedule.
+
+### Card design
+
+- "verbatim" wordmark + entity type + `VRB-<short8>` ID in the header.
+- The verbatim quote rendered as a Slack quote block (`>`).
+- Actor / deadline / confidence shown as a fields row.
+- All user-supplied strings are HTML-escaped before being sent to Slack
+  mrkdwn so `<script>` / `</section>` / etc. in transcripts can't break the
+  card layout or smuggle markup.
+- Once an entity is resolved (confirmed / dismissed / resolved), the action
+  row is hidden — the card becomes a historical record, not an active prompt.
+
+### Tests
+- 17 new tests in `tests/test_slack_hitl.py`: card structure (header, four
+  action IDs, quote inclusion, post-resolution button removal, HTML escape),
+  dispatch verbs (confirm / dismiss / edit / reassign / unknown / missing
+  entity), `_handle_interactive` end-to-end (response_url path + ephemeral
+  fallback), `post_extraction_card` (blocks posted, missing entity raises).
+
+### Why
+Most teams will not adopt yet another web dashboard for triage. They will
+adopt a Slack button. HITL-in-Slack closes the loop between extraction and
+ownership without forcing a context switch — and the same `dispatch_action`
+seam will host the eventual reassign flow (Slack user picker) and edit modal.
+
 ## [0.9.4] — 2026-05-19
 
 ### Added — local LLM via Ollama

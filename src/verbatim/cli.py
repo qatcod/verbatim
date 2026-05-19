@@ -1461,6 +1461,61 @@ def slack_bot_digest_cmd(
     console.print(f"[green]✓[/green] digest posted to {channel} (ts: {result.get('ts', '?')})")
 
 
+@slack_bot_app.command("post-card")
+def slack_bot_post_card_cmd(
+    channel: str = typer.Argument(..., help="Channel id or name to post to."),
+    entity_id: str = typer.Argument(..., help="Verbatim entity id (or 8-char prefix)."),
+    bot_token: str | None = typer.Option(
+        None, "--bot-token", envvar="SLACK_BOT_TOKEN",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Post an interactive extraction card (with Confirm / Dismiss / Edit / Reassign
+    buttons) for one entity to a Slack channel.
+
+    Button clicks fire `block_actions` events that the running `verbatim slack-bot
+    run` daemon picks up and dispatches. If the daemon is not running, the buttons
+    won't do anything — start it with `verbatim slack-bot run`.
+    """
+    if not bot_token:
+        err_console.print("[red]Bot token required.[/red] Set $SLACK_BOT_TOKEN or pass --bot-token.")
+        raise typer.Exit(code=2)
+
+    # Resolve prefix → full id
+    conn = state.open_db(db)
+    try:
+        full_id = entity_id
+        if len(entity_id) < 32:
+            row = conn.execute(
+                "SELECT id FROM entities WHERE id LIKE ? LIMIT 2",
+                (entity_id + "%",),
+            ).fetchall()
+            if len(row) != 1:
+                err_console.print(
+                    f"[red]Entity prefix '{entity_id}' didn't uniquely resolve "
+                    f"({len(row)} matches).[/red]"
+                )
+                raise typer.Exit(code=1)
+            full_id = row[0]["id"]
+    finally:
+        conn.close()
+
+    bot = slack_bot_lib.VerbatimSlackBot(
+        bot_token=bot_token,
+        app_token="not-needed-for-card-post",
+        db_path=db,
+    )
+    try:
+        result = bot.post_extraction_card(channel, full_id)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Card post failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"[green]✓[/green] extraction card posted to {channel} "
+        f"(ts: {result.get('ts', '?')})"
+    )
+
+
 # ----------------------- project (push to external trackers) -----------------------
 
 

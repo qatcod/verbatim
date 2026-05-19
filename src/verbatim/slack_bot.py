@@ -64,7 +64,7 @@ from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 
-from . import state
+from . import state, store
 
 log = logging.getLogger(__name__)
 
@@ -232,6 +232,165 @@ def _conf_emoji(confidence: str) -> str:
     )
 
 
+# ----------------------- Block Kit (interactive HITL) -----------------------
+
+
+_KIND_LABEL = {
+    "commitment": "Commitment",
+    "decision": "Decision",
+    "open_question": "Question",
+    "blocker": "Blocker",
+}
+
+
+def _result_summary(entity: dict[str, Any]) -> str:
+    p = entity.get("payload", {})
+    k = entity["kind"]
+    if k == "commitment":
+        actor = p.get("actor") or "?"
+        return f"{actor} → {p.get('deliverable') or '?'}"
+    if k == "decision":
+        return f"{p.get('topic') or '?'} → {p.get('outcome') or '?'}"
+    if k == "open_question":
+        return p.get("question") or p.get("topic") or "?"
+    if k == "blocker":
+        return f"{p.get('blocked_thing') or '?'} blocked by {p.get('blocked_by') or '?'}"
+    return entity["id"]
+
+
+def build_extraction_card_blocks(entity: dict[str, Any]) -> list[dict[str, Any]]:
+    """Block Kit payload for the interactive extraction card.
+
+    Mirrors the design's mock from `docs/design/verbatim.html`: header chip with
+    the verbatim lock label, a quote section, then four buttons. action_id
+    format is `verbatim:<verb>:<entity_id>` so the handler can dispatch.
+    """
+    kind = entity["kind"]
+    kind_label = _KIND_LABEL.get(kind, kind.replace("_", " ").title())
+    eid = entity["id"]
+    short_id = f"VRB-{eid[:8]}"
+    conf = entity.get("confidence", "unknown")
+
+    summary = _result_summary(entity)
+    sources = entity.get("sources") or []
+    quote_text = sources[0].get("verbatim_quote") if sources else ""
+    speaker = (sources[0].get("speaker") if sources else None) or ""
+
+    status = entity.get("status") or "open"
+    is_resolved_state = status in {"confirmed", "dismissed", "resolved"}
+
+    header_text = (
+        f"*{_conf_emoji(conf)} verbatim* — extracted *{kind_label}* "
+        f"`{short_id}` _( {conf} confidence )_"
+    )
+    if is_resolved_state:
+        header_text += f"  ·  *status:* `{status}`"
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header_text}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{_escape_mrkdwn(summary)}*"}},
+    ]
+    if quote_text:
+        attribution = f" — _{_escape_mrkdwn(speaker)}_" if speaker else ""
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"> {_escape_mrkdwn(quote_text)}{attribution}",
+            },
+        })
+
+    if not is_resolved_state:
+        blocks.append({
+            "type": "actions",
+            "block_id": f"verbatim_actions_{eid}",
+            "elements": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": "✓ Confirm"},
+                    "action_id": f"verbatim:confirm:{eid}",
+                    "value": eid,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✕ Not a commitment"},
+                    "action_id": f"verbatim:dismiss:{eid}",
+                    "value": eid,
+                    "style": "danger",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Edit details"},
+                    "action_id": f"verbatim:edit:{eid}",
+                    "value": eid,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Reassign"},
+                    "action_id": f"verbatim:reassign:{eid}",
+                    "value": eid,
+                },
+            ],
+        })
+    return blocks
+
+
+def _escape_mrkdwn(text: str | None) -> str:
+    """Defensive escape for Slack mrkdwn. We treat user content as plain text."""
+    if not text:
+        return ""
+    # Slack mrkdwn escapes via &amp; &lt; &gt;
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def dispatch_action(
+    conn,
+    *,
+    verb: str,
+    entity_id: str,
+    user_id: str | None,
+) -> str:
+    """Handle one button click by `verb`. Returns the ephemeral reply text."""
+    entity = state.show_entity(conn, entity_id)
+    if entity is None:
+        return f"_Entity `{entity_id[:8]}…` not found — it may have been deleted._"
+
+    if verb == "confirm":
+        store.update_entity_status(conn, entity_id, "confirmed")
+        actor = (entity.get("payload") or {}).get("actor") or "owner"
+        attribution = f" by <@{user_id}>" if user_id else ""
+        return (
+            f":white_check_mark: Confirmed{attribution}. "
+            f"`VRB-{entity_id[:8]}` is now marked as a confirmed *{entity['kind']}* "
+            f"({actor})."
+        )
+    if verb == "dismiss":
+        store.update_entity_status(conn, entity_id, "dismissed")
+        return (
+            f":x: Dismissed `VRB-{entity_id[:8]}` — it won't appear in active "
+            "queries. Run `verbatim unlink` or update via the web UI if this was "
+            "an accident."
+        )
+    if verb == "edit":
+        return (
+            f"_Editing isn't wired up in Slack yet._ Open the entity in the web UI: "
+            f"`/verbatim show {entity_id[:8]}` or visit your local "
+            "`verbatim serve` instance."
+        )
+    if verb == "reassign":
+        return (
+            f"_Reassigning isn't wired up in Slack yet._ Use the CLI: "
+            f"`verbatim show {entity_id[:8]}` shows the entity; reassignment "
+            "via the web UI is on the v1 roadmap."
+        )
+    return f"_Unknown action `{verb}` on `VRB-{entity_id[:8]}`._"
+
+
 def _merged_pill_text(merged_count: int) -> str:
     """Compact "+N merged" suffix shared by all Slack list views.
 
@@ -332,9 +491,50 @@ class VerbatimSlackBot:
             )
             if req.type == "slash_commands":
                 self._handle_slash_command(req.payload or {})
+            elif req.type == "interactive":
+                self._handle_interactive(req.payload or {})
             # Other event types ignored for v1
         except Exception:  # noqa: BLE001
             log.exception("slack bot failed handling request")
+
+    def _handle_interactive(self, payload: dict[str, Any]) -> None:
+        """Handle block_actions interactions — button clicks on extraction cards."""
+        if payload.get("type") != "block_actions":
+            return
+        actions = payload.get("actions") or []
+        if not actions:
+            return
+        action = actions[0]
+        action_id = action.get("action_id") or ""
+        response_url = payload.get("response_url")
+        user = (payload.get("user") or {}).get("id")
+
+        # Parse action_id format: "verbatim:<verb>:<entity_id>"
+        try:
+            _ns, verb, entity_id = action_id.split(":", 2)
+        except ValueError:
+            log.warning("unrecognized action_id: %r", action_id)
+            return
+
+        conn = state.open_db(self._db_path)
+        try:
+            reply = dispatch_action(conn, verb=verb, entity_id=entity_id, user_id=user)
+        finally:
+            conn.close()
+
+        if response_url:
+            try:
+                self._post_response_url(response_url, reply)
+                return
+            except Exception:  # noqa: BLE001
+                log.exception("failed posting interactive response_url")
+        # Fallback: post in the channel the action came from
+        channel = (payload.get("channel") or {}).get("id")
+        if user and channel:
+            try:
+                self._web.chat_postEphemeral(channel=channel, user=user, text=reply)
+            except Exception:  # noqa: BLE001
+                log.exception("interactive ephemeral fallback failed")
 
     def _handle_slash_command(self, payload: dict[str, Any]) -> None:
         text = payload.get("text") or ""
@@ -409,6 +609,28 @@ class VerbatimSlackBot:
         # Block by waiting on the socket. Use an Event the operator can SIGINT.
         import threading
         threading.Event().wait()
+
+    # ----- outbound: extraction card with interactive buttons -----
+
+    def post_extraction_card(self, channel: str, entity_id: str) -> dict[str, Any]:
+        """Post an interactive extraction card for one entity to a channel.
+
+        The card shows the entity summary + verbatim quote + buttons:
+        Confirm, Dismiss, Open in Verbatim. Button clicks fire block_actions
+        events that the bot handles (see `_handle_interactive`).
+        """
+        conn = state.open_db(self._db_path)
+        try:
+            entity = state.show_entity(conn, entity_id)
+        finally:
+            conn.close()
+        if entity is None:
+            raise ValueError(f"Entity not found: {entity_id}")
+        blocks = build_extraction_card_blocks(entity)
+        fallback = f"Verbatim {entity['kind']}: {_result_summary(entity)}"
+        return self._web.chat_postMessage(
+            channel=channel, text=fallback, blocks=blocks,
+        ).data  # type: ignore[no-any-return]
 
     # ----- outbound: digests -----
 
