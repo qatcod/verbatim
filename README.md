@@ -2,7 +2,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.8.0 — CLI extraction, SQLite state graph with cross-session reconciliation, MCP server, live Slack + Slack export + GitHub PR threads, Linear projection, Slack bot, web UI (`verbatim serve`) with **three-pane Linear-style inbox + quote-as-hero detail + light/dark themes**, cross-entity search, email digest, calibrated prompt, 247-test pytest suite, CI. Design implementation per Claude Design handoff at `docs/design/`.
+**Status:** v0.9.6 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), and GitHub PR discussions. Local SQLite state graph with cross-session reconciliation. Web UI, Slack bot with interactive HITL buttons, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Cost guardrails (per-model budget, dry-run, daily caps). 303 tests, CI on 3.10/3.11/3.12. Design implementation per Claude Design handoff at `docs/design/`.
 
 ---
 
@@ -14,7 +14,7 @@ Verbatim is different. Three insights:
 
 1. **Continuous state, not point-in-time extraction.** Decisions, commitments, blockers, and open questions are *remembered*, reconciled across conversations, and updated as work happens.
 
-2. **Multi-source, not meeting-only.** Most decisions happen *outside* meetings — in Slack threads, PR comments, DMs. A product that only ingests meetings misses the majority of team state. (v1+)
+2. **Multi-source, not meeting-only.** Most decisions happen *outside* meetings — in Slack threads, PR comments, DMs. Verbatim ingests all three.
 
 3. **Agent-native, not just human-facing.** Verbatim ships an MCP server, so Claude Code, Cursor, and any AI agent can query "what's blocking the Xero deal?" or "what did Qat commit to this week?" as a tool — with sourced, verbatim quotes.
 
@@ -22,16 +22,26 @@ Plus the non-negotiables: open source, self-hostable, bring your own LLM, every 
 
 ## What works today
 
-- **CLI extraction.** Take a meeting transcript, get structured commitments, decisions, open questions, and blockers — each with a confidence score and the verbatim quote that supports it.
-- **Persistent state.** Extractions accumulate in a local SQLite store. Query it from the CLI or expose it to AI agents via MCP.
-- **MCP server.** Wire `verbatim-mcp` into Claude Code or Cursor and the agent can read your team state as a tool.
+- **Extraction.** Meeting transcripts (`.txt`, `.vtt`, stdin), Slack workspace exports, live Slack via Web API, GitHub PR discussions. Each item carries a confidence score and the verbatim quote that produced it.
+- **Persistent state.** Extractions accumulate in a local SQLite store with cross-session reconciliation (rapidfuzz token-set, kind+actor scoped). Same commitment from a meeting and a Slack thread becomes one entity with two source quotes.
+- **Surfaces.** CLI, web UI (`verbatim serve` — three-pane Linear-style inbox, light/dark), Slack bot with `/verbatim` slash commands, Slack interactive HITL cards (Confirm / Dismiss / Edit / Reassign buttons), email digest, MCP server for Claude / Cursor / any agent.
+- **Projections.** Push commitments into Linear, GitHub Issues, or Jira. Idempotent. Source quotes carried into the issue description so every projected ticket traces back to the conversation it came from.
+- **Daemon mode.** `verbatim watch` polls Slack on an interval and continuously ingests new threads, with auto-reconciliation against existing state.
+- **Bring your own LLM.** Anthropic Claude by default; any tool-calling model via Ollama (`--model ollama:llama3.1:8b`, `$0/M tokens`, air-gapped). Cost guardrails: per-model spend tracking, daily budget caps, dry-run before any paid call.
+- **First-run wizard.** `verbatim init` validates env, sets up the DB, runs a sample extraction.
 
 ## Install
 
 ```bash
-git clone <repo-url> verbatim
+pip install verbatim
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/qatcod/verbatim
 cd verbatim
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Quick start
@@ -234,7 +244,7 @@ verbatim serve --host 0.0.0.0 --port 8080
 
 Routes: dashboard, commitments, decisions, open-questions, blockers, sessions, projections, and `/entity/<id>` with all merged source quotes. Each list page has inline filters (actor / owner / raised_by / min_confidence / show-merged-siblings-separately).
 
-**Local-only by default.** The UI is read-only in v0.6 and binds to `127.0.0.1`. Multi-user with SSO / token auth is the v0.7 story; for now treat this as a local browser tool you point your colleagues at when they're on the same network or a tunneled session.
+**Local-only by default.** The UI is read-only and binds to `127.0.0.1`. Multi-user with SSO / token auth is the v1 story; for now treat this as a local browser tool you point your colleagues at when they're on the same network or a tunneled session.
 
 ### Email a digest — `verbatim digest email`
 
@@ -311,9 +321,15 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 | **v0.4.0** ✅ | Cross-session reconciliation with `canonical_id`/`merged_at`, rapidfuzz matcher, `reconcile`/`link`/`unlink`/`show` commands, folded-by-default queries. Linear projection with idempotent issue creation, user resolution, verbatim-quote-bearing descriptions. |
 | **v0.4.1** ✅ | `--auto-reconcile` flags on every ingest command so continuous-ingest paths merge in real time. |
 | **v0.5.0** ✅ | Slack bot with Socket Mode (no public URL) — `/verbatim` slash commands for non-technical users, ephemeral replies, digest posting. |
-| **v0.6.0** ✅ (current) | Read-mostly web UI (`verbatim serve`). Email digest (`verbatim digest email`) over SMTP. Slack bot `not_in_channel` fix — now uses `response_url` so `/verbatim` works in any channel. 29 new tests. |
-| **v1** | LLM-assisted reconciliation. Linear → Verbatim sync-back. Auth + mutating web endpoints. Hosted-SaaS deployment path. |
-| **v2** | Identity resolution across systems. Confidence-gated review queue. Slack bot for queries. |
+| **v0.6.0** ✅ | Read-mostly web UI (`verbatim serve`). Email digest (`verbatim digest email`) over SMTP. Slack bot `not_in_channel` fix — `/verbatim` works in any channel via `response_url`. |
+| **v0.7.x** ✅ | Cross-entity search (rapidfuzz + SQLite LIKE). Web-UI design refresh per Claude Design handoff: three-pane inbox, quote-as-hero detail, dark/light theme tokens, per-type color tokens, Inter + JetBrains Mono. |
+| **v0.8.x** ✅ | OSS hygiene (CONTRIBUTING, CODE_OF_CONDUCT, MIT license), `verbatim init` first-run wizard, cost guardrails (per-model spend tracking, daily budget caps, dry-run before any paid call). |
+| **v0.9.0–v0.9.3** ✅ | GitHub Issues projection. Jira projection (ADF descriptions). `verbatim watch` daemon mode — continuous Slack ingest with auto-reconcile. |
+| **v0.9.4** ✅ | Local LLM via Ollama (OpenAI-compat tool calling). Pluggable extractor backend. $0/M tokens, air-gapped. |
+| **v0.9.5** ✅ | Slack interactive HITL — Block Kit extraction cards with Confirm / Dismiss / Edit / Reassign buttons fired through Socket Mode `block_actions`. |
+| **v0.9.6** ✅ (current) | PyPI release pipeline via OIDC trusted publishing. GitHub Pages landing site under `docs/`. 303 tests across the suite, CI on Python 3.10 / 3.11 / 3.12. |
+| **v1** | LLM-assisted reconciliation. Linear / Jira / GitHub Issues → Verbatim sync-back. Auth + mutating web endpoints. Hosted-SaaS deployment path. |
+| **v2** | Identity resolution across systems. Confidence-gated review queue. Reassign-via-Slack-user-picker (the live HITL surface that v0.9.5 stubbed). |
 | **v3** | Proactive agents — auto-standup, deadline nudges, contradiction detection, status-report generation. |
 
 ## Design principles
@@ -360,7 +376,7 @@ Taz to review Thursday morning, public release decision Thursday afternoon.
 
 ## Contributing
 
-Connectors and projection targets are intentionally modular. If you want to ship a connector for your team's tool of choice (Slack history, GitHub audit, Linear push), see `CONTRIBUTING.md` (coming with v1).
+Connectors and projection targets are intentionally modular. If you want to ship a connector for your team's tool of choice (Slack history, GitHub audit, Linear push), see [`CONTRIBUTING.md`](CONTRIBUTING.md). Issues and PRs welcome.
 
 ## License
 
