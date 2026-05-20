@@ -1130,6 +1130,133 @@ def _print_deadline_table(items: list[dict[str, Any]], *, title: str) -> None:
     console.print(table)
 
 
+@query_app.command("stale")
+def query_stale(
+    days: int = typer.Option(
+        30, "--days", "-d", help="Flag entities open and untouched this many days."
+    ),
+    kind: str | None = typer.Option(
+        None, "--kind", "-k",
+        help="Restrict to one kind: commitment | decision | open_question | blocker.",
+    ),
+    limit: int = typer.Option(200, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """List open entities that have sat untouched too long.
+
+    "Untouched" means no confirm / edit / reassign / dismiss activity since
+    the cutoff — these are items quietly rotting in the state graph.
+    """
+    conn = state.open_db(db)
+    try:
+        items = state.stale_entities(conn, stale_after_days=days, kind=kind, limit=limit)
+    finally:
+        conn.close()
+    if not items:
+        console.print(
+            f"[green]Nothing stale.[/green] Every open item has moved in the last {days} days."
+        )
+        return
+    table = Table(
+        show_header=True, header_style="bold cyan",
+        title=f"Stale — open + untouched ≥ {days} days",
+    )
+    table.add_column("id", style="dim", no_wrap=True)
+    table.add_column("kind", no_wrap=True)
+    table.add_column("idle", no_wrap=True)
+    table.add_column("summary")
+    for item in items:
+        idle = item.get("idle_days")
+        idle_txt = f"[red]{idle}d[/red]" if idle is not None else "—"
+        payload = item["payload"]
+        summary = (
+            payload.get("deliverable") or payload.get("topic")
+            or payload.get("question") or payload.get("blocked_thing") or "—"
+        )
+        table.add_row(item["id"][:8] + "…", item["kind"], idle_txt, summary)
+    console.print(table)
+
+
+@app.command(name="standup")
+def standup_cmd(
+    person: str = typer.Argument(..., help="Person's name (substring match)."),
+    recent_days: int = typer.Option(
+        7, "--recent-days", help="Window for the 'recently resolved' section."
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Generate a standup-style status summary for one person.
+
+    Pulls from the state graph: what they're on the hook for, what's blocking
+    them, open questions they raised, and what moved recently. Paste it
+    straight into your standup channel.
+    """
+    conn = state.open_db(db)
+    try:
+        report = state.standup(conn, person, recent_days=recent_days)
+    finally:
+        conn.close()
+
+    stats = report["stats"]
+    if stats["total"] == 0 and not report["recently_resolved"]:
+        console.print(
+            f"[dim]Nothing recorded for '{person}'. "
+            "Try `verbatim query people` to see known names.[/dim]"
+        )
+        return
+
+    console.print(f"\n[bold cyan]Standup — {person}[/bold cyan]\n")
+
+    owed = report["owed"]
+    if owed:
+        console.print("[bold violet]On the hook[/bold violet]")
+        for c in owed:
+            p = c["payload"]
+            days = c.get("days_until")
+            status = c.get("due_status")
+            if status == "overdue":
+                tag = f" [red](overdue {abs(days)}d)[/red]"
+            elif status == "due_today":
+                tag = " [yellow](due today)[/yellow]"
+            elif days is not None:
+                tag = f" [yellow](in {days}d)[/yellow]"
+            else:
+                tag = ""
+            console.print(f"  • {p.get('deliverable') or '—'}{tag}")
+        console.print()
+
+    if report["blocked"]:
+        console.print("[bold red]Blocked[/bold red]")
+        for b in report["blocked"]:
+            p = b["payload"]
+            console.print(
+                f"  • {p.get('blocked_thing') or '—'} "
+                f"— blocked by {p.get('blocked_by') or '?'}"
+            )
+        console.print()
+
+    if report["questions"]:
+        console.print("[bold yellow]Open questions raised[/bold yellow]")
+        for q in report["questions"]:
+            p = q["payload"]
+            console.print(f"  • {p.get('question') or p.get('topic') or '—'}")
+        console.print()
+
+    if report["recently_resolved"]:
+        console.print("[bold green]Recently moved[/bold green]")
+        for r in report["recently_resolved"]:
+            ent = r["entity"]
+            p = ent["payload"]
+            summary = (
+                p.get("deliverable") or p.get("topic")
+                or p.get("question") or p.get("blocked_thing") or "—"
+            )
+            console.print(
+                f"  • [{r['action']}] {ent['kind']}: {summary}"
+            )
+        console.print()
+
+
 @query_app.command("person")
 def query_person(
     name: str = typer.Argument(..., help="Person's name (substring match, case-insensitive)."),

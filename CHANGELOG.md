@@ -2,6 +2,48 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] — 2026-05-21
+
+### Added — Staleness detection
+
+`verbatim query stale` flags open entities that have sat untouched too
+long — no confirm / edit / reassign / dismiss activity since the cutoff
+(default 30 days). These are items quietly rotting in the state graph: a
+commitment nobody's looked at in two months is either done-and-forgotten
+or genuinely dropped, and either way it should resurface.
+
+`--days N` tunes the cutoff; `--kind` restricts to one entity kind. Each
+row shows how many days the item has been idle. The audit log (v0.10.1) is
+the activity signal — an entity with zero audit rows counts as untouched.
+
+### Added — Auto-standup
+
+`verbatim standup <person>` generates a standup-style status summary from
+the state graph — no manual writing:
+
+- **On the hook** — open commitments the person owns, deadline-annotated
+  (overdue / due today / in N days).
+- **Blocked** — blockers they own.
+- **Open questions raised** — unanswered questions they asked.
+- **Recently moved** — entities tied to them with a confirm / resolve /
+  dismiss in the audit log within the last 7 days (`--recent-days` tunes
+  the window).
+
+Paste it straight into a standup channel. It's the person view (v0.10.0)
+reframed as a report rather than a browse surface.
+
+### Tests
+- 9 new tests in `tests/test_proactive.py`: `stale_entities` (old +
+  untouched flagged, recent excluded, recently-audited excluded, kind
+  filter) and `standup` (all buckets collected, deadline annotation,
+  audit-driven recently-moved, old-audit-ignored, unknown-person empty).
+
+### Why
+Staleness and standup are the second and third proactive features. Stale
+detection catches the failure mode every team tool has — items that get
+created and then silently abandoned. Auto-standup removes the busywork of
+writing a status update when Verbatim already holds every fact it needs.
+
 ## [0.11.0] — 2026-05-21
 
 ### Added — Proactive deadline tracking

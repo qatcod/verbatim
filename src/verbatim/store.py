@@ -553,6 +553,56 @@ def record_audit(
     return audit_id
 
 
+def fetch_stale_entities(
+    conn: sqlite3.Connection,
+    *,
+    before_iso: str,
+    kind: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Open canonical entities created before `before_iso` with no audit
+    activity at or after `before_iso`.
+
+    "Stale" means: still open, old, and nothing has touched it — no confirm,
+    edit, reassign, dismiss. The audit table is the activity signal; an entity
+    with zero audit rows counts as untouched. ISO-8601 UTC timestamps sort
+    lexically, so a string comparison is a correct chronological one.
+    """
+    conditions = ["e.status = 'open'", "e.canonical_id IS NULL", "e.created_at < ?"]
+    params: list[Any] = [before_iso]
+    if kind:
+        conditions.append("e.kind = ?")
+        params.append(kind)
+    where = " AND ".join(conditions)
+    rows = conn.execute(
+        f"""
+        SELECT e.id,
+               (SELECT MAX(a.created_at) FROM entity_audit a
+                WHERE a.entity_id = e.id) AS last_activity
+        FROM entities e
+        WHERE {where}
+        ORDER BY e.created_at ASC
+        LIMIT ?
+        """,
+        [*params, limit],
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        last = r["last_activity"]
+        if last is not None and last >= before_iso:
+            continue  # touched recently — not stale
+        entity = fetch_entity(conn, r["id"])
+        if entity is None:
+            continue
+        merged_ids = _fetch_merged_member_ids(conn, entity["id"])
+        entity["merged_count"] = len(merged_ids)
+        for mid in merged_ids:
+            entity["sources"].extend(fetch_sources(conn, mid))
+        entity["last_activity"] = last
+        out.append(entity)
+    return out
+
+
 def fetch_audit(
     conn: sqlite3.Connection, entity_id: str, *, limit: int = 100,
 ) -> list[dict[str, Any]]:

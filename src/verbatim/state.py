@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -336,6 +336,119 @@ def due_soon_commitments(
         )
         if c["due_status"] in ("due_today", "due_soon")
     ]
+
+
+# ----------------------- staleness + standup (proactive layer) -----------------------
+
+
+def stale_entities(
+    conn: sqlite3.Connection,
+    *,
+    stale_after_days: int = 30,
+    kind: str | None = None,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Open entities that have sat untouched longer than `stale_after_days`.
+
+    "Untouched" means no audit activity (confirm / edit / reassign / dismiss)
+    since the cutoff. Each returned entity carries `last_activity` (ISO string
+    or None) and `idle_days` (whole days since it was created).
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=stale_after_days)
+    cutoff_iso = cutoff.isoformat()
+    items = store.fetch_stale_entities(
+        conn, before_iso=cutoff_iso, kind=kind, limit=limit,
+    )
+    for item in items:
+        created = item.get("created_at")
+        try:
+            created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            item["idle_days"] = (now - created_dt).days
+        except (ValueError, TypeError):
+            item["idle_days"] = None
+    return items
+
+
+def standup(
+    conn: sqlite3.Connection,
+    person: str,
+    *,
+    now: datetime | None = None,
+    recent_days: int = 7,
+) -> dict[str, Any]:
+    """Build a standup-style status summary for one person from the state graph.
+
+    Returns a dict with:
+      - `owed`: open commitments where the person is the actor (deadline-sorted)
+      - `blocked`: blockers the person owns
+      - `questions`: open questions the person raised
+      - `recently_resolved`: entities tied to the person whose audit log shows
+        a confirm/resolve/dismiss within `recent_days`
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.date()
+    view = store.fetch_person(conn, person, include_resolved=False)
+
+    owed = deadlined_commitments_subset(view["commitments"], today=today)
+
+    recent_cutoff = (now - timedelta(days=recent_days)).isoformat()
+    recently_resolved: list[dict[str, Any]] = []
+    # Audit-driven "what moved recently" — check every entity tied to the person.
+    seen: set[str] = set()
+    for bucket in (view["commitments"], view["decisions"],
+                   view["questions_raised"], view["blockers_owned"]):
+        for entity in bucket:
+            if entity["id"] in seen:
+                continue
+            seen.add(entity["id"])
+            audit = store.fetch_audit(conn, entity["id"], limit=20)
+            for row in audit:
+                if (row["action"] in ("confirm", "resolve", "dismiss")
+                        and (row.get("created_at") or "") >= recent_cutoff):
+                    recently_resolved.append({
+                        "entity": entity,
+                        "action": row["action"],
+                        "at": row.get("created_at"),
+                    })
+                    break
+
+    return {
+        "person": person,
+        "owed": owed,
+        "blocked": view["blockers_owned"],
+        "questions": view["questions_raised"],
+        "recently_resolved": recently_resolved,
+        "stats": view["stats"],
+    }
+
+
+def deadlined_commitments_subset(
+    commitments: list[dict[str, Any]], *, today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Annotate an already-fetched commitment list with deadline status.
+
+    A lighter sibling of `deadlined_commitments` for callers (like `standup`)
+    that already hold the commitment rows and don't want a second DB query.
+    """
+    today = today or date.today()
+    for item in commitments:
+        raw = (item.get("payload") or {}).get("deadline") or item.get("deadline")
+        parsed = deadlines.parse_deadline(raw, today=today)
+        item["deadline_date"] = parsed
+        item["due_status"] = deadlines.due_status(parsed, today=today)
+        item["days_until"] = (
+            deadlines.days_until(parsed, today=today) if parsed else None
+        )
+
+    def _key(it: dict[str, Any]) -> tuple[int, int]:
+        d = it.get("deadline_date")
+        return (2, 0) if d is None else (0, (d - today).days)
+
+    return sorted(commitments, key=_key)
 
 
 # Payload serializers — preserve the kind-specific fields not in the
