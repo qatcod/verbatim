@@ -2,6 +2,43 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.12.2] — 2026-05-21
+
+### Added — Visual relationship graph
+
+The typed relationships from v0.12.1 now have a visual view. The new
+`/graph` page in the web UI draws the entity relationship graph: entities
+as nodes (colored by kind), typed relationships as labelled edges, every
+node a click-through link to its detail page.
+
+New `verbatim.graph` module assembles the node/edge set from the
+`entity_relationships` table and computes 2-D positions with a small
+Fruchterman-Reingold force-directed layout — pure stdlib, no JS-side
+physics. Initial positions are seeded deterministically from each entity
+id, so the same graph lays out identically on every reload.
+
+Only entities that participate in at least one relationship appear — an
+isolated node has nothing to show. The page renders as an inline SVG with
+a kind legend; "Graph" sits in the web sidebar next to Contradictions.
+
+### Fixed
+- The per-person section headers on `/people` referenced a `--commit` CSS
+  variable that doesn't exist (the token is `--commitment`); the headings
+  now get their intended commitment-violet color.
+
+### Tests
+- 9 new tests in `tests/test_graph.py`: graph assembly (empty when no
+  relationships, related entities included, unrelated excluded, node
+  kind/label), the force layout (distinct in-bounds positions,
+  deterministic across calls), and the `/graph` route (empty state, SVG
+  render with entity links, sidebar link).
+
+### Why
+A commitment that resolves a blocker, the decision that answers a
+question, the chain of superseded decisions — those are a shape, and a
+shape wants to be seen. The graph turns the relationship data into the
+one view that makes the "state graph" legible at a glance.
+
 ## [0.12.1] — 2026-05-21
 
 ### Added — Entity relationships

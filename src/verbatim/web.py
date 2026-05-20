@@ -50,6 +50,7 @@ from starlette.responses import HTMLResponse
 from starlette.routing import Route
 
 from . import contradictions, state, store
+from . import graph as graph_mod
 
 # ----------------------- DB lifecycle for handlers -----------------------
 
@@ -746,6 +747,33 @@ a:hover { color: var(--accent-2); text-decoration: underline; text-underline-off
   border: 1px solid var(--border);
 }
 
+/* ===== Relationship graph ===== */
+.graph-legend {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  margin-bottom: 14px;
+}
+.graph-legend-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-3); text-transform: capitalize;
+}
+.graph-legend-dot { width: 9px; height: 9px; border-radius: 50%; }
+.graph-canvas {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); overflow: hidden;
+}
+.graph-svg { display: block; width: 100%; height: auto; }
+.graph-svg a { cursor: pointer; }
+.graph-svg a:hover circle { stroke: var(--accent); }
+.graph-node-label {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 11px; fill: var(--text-2);
+}
+.graph-svg a:hover .graph-node-label { fill: var(--text); }
+.graph-edge-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px; fill: var(--text-3);
+}
+
 /* ===== Detail pane ===== */
 .detail {
   background: var(--bg);
@@ -1369,6 +1397,8 @@ def _sidebar_html(*, active_filter: str, counts: dict[str, int], search_q: str =
         + (f'<span class="count">{contradiction_count}</span>'
            if contradiction_count else "")
         + "</a>"
+        '<a href="/graph" class="nav-item">'
+        f'<span class="ico">{_ICONS.get("bolt", "")}</span><span>Graph</span></a>'
         '<a href="/people" class="nav-item">'
         f'<span class="ico">{_ICONS.get("inbox", "")}</span><span>People</span>'
         f'<span class="count">{counts.get("people", 0)}</span></a>'
@@ -2361,7 +2391,7 @@ async def person_detail(request: Request) -> HTMLResponse:
         )
         sections = "".join([
             _render_person_section("Commitments owed", view["commitments"],
-                                   color_var="--commit"),
+                                   color_var="--commitment"),
             _render_person_section("Blockers owned", view["blockers_owned"],
                                    color_var="--blocker"),
             _render_person_section("Questions raised", view["questions_raised"],
@@ -2519,6 +2549,104 @@ async def contradictions_page(request: Request) -> HTMLResponse:
     )
 
 
+# ----------------------- relationship graph -----------------------
+
+
+_GRAPH_KIND_COLOR = {
+    "commitment": "var(--commitment)",
+    "decision": "var(--decision)",
+    "open_question": "var(--question)",
+    "blocker": "var(--blocker)",
+}
+
+
+def _render_graph_svg(g: graph_mod.Graph) -> str:
+    """Render the relationship graph as an inline, click-through SVG."""
+    width, height = 1000, 640
+    pos = {n.entity_id: n for n in g.nodes}
+
+    edge_svg: list[str] = []
+    for e in g.edges:
+        a, b = pos.get(e.from_id), pos.get(e.to_id)
+        if a is None or b is None:
+            continue
+        mx, my = (a.x + b.x) / 2, (a.y + b.y) / 2
+        edge_svg.append(
+            f'<line x1="{a.x:.1f}" y1="{a.y:.1f}" '
+            f'x2="{b.x:.1f}" y2="{b.y:.1f}" '
+            'stroke="var(--border-strong)" stroke-width="1.5" />'
+        )
+        edge_svg.append(
+            f'<text x="{mx:.1f}" y="{my:.1f}" class="graph-edge-label" '
+            f'text-anchor="middle">{html.escape(e.rel_type)}</text>'
+        )
+
+    node_svg: list[str] = []
+    for n in g.nodes:
+        color = _GRAPH_KIND_COLOR.get(n.kind, "var(--text-3)")
+        label = n.label if len(n.label) <= 30 else n.label[:29] + "…"
+        node_svg.append(
+            f'<a href="/entity/{html.escape(n.entity_id)}">'
+            f'<circle cx="{n.x:.1f}" cy="{n.y:.1f}" r="11" '
+            f'fill="{color}" stroke="var(--bg)" stroke-width="2" />'
+            f'<text x="{n.x:.1f}" y="{n.y + 26:.1f}" class="graph-node-label" '
+            f'text-anchor="middle">{html.escape(label)}</text>'
+            "</a>"
+        )
+
+    return (
+        f'<svg viewBox="0 0 {width} {height}" class="graph-svg" '
+        f'xmlns="http://www.w3.org/2000/svg" role="img" '
+        'aria-label="Entity relationship graph">'
+        + "".join(edge_svg)
+        + "".join(node_svg)
+        + "</svg>"
+    )
+
+
+async def graph_page(request: Request) -> HTMLResponse:
+    """Visual view of the entity relationship graph."""
+    conn = _open_conn()
+    try:
+        counts = _all_counts(conn)
+        g = graph_mod.build_graph(conn)
+    finally:
+        conn.close()
+
+    if g.is_empty:
+        body_inner = (
+            '<div class="list-empty">'
+            '<div class="empty-title">No relationships yet</div>'
+            "<div>Connect entities with typed edges to see the graph.</div>"
+            "<code>verbatim relate &lt;from&gt; &lt;to&gt; --type resolves</code>"
+            "</div>"
+        )
+    else:
+        legend = "".join(
+            f'<span class="graph-legend-item">'
+            f'<span class="graph-legend-dot" style="background:{color}"></span>'
+            f'{html.escape(kind.replace("_", " "))}</span>'
+            for kind, color in _GRAPH_KIND_COLOR.items()
+        )
+        body_inner = (
+            f'<div class="graph-legend">{legend}</div>'
+            f'<div class="graph-canvas">{_render_graph_svg(g)}</div>'
+        )
+
+    inner = (
+        '<main id="main-content" class="app-page">'
+        '<h1 class="page-title">Relationship graph'
+        f'<span class="page-subtitle">{len(g.nodes)} nodes · '
+        f'{len(g.edges)} edges</span></h1>'
+        + body_inner
+        + "</main>"
+    )
+    return HTMLResponse(
+        _shell("Graph", _shell_with_sidebar(inner=inner, counts=counts),
+               body_class="app-inbox")
+    )
+
+
 # ----------------------- app factory -----------------------
 
 
@@ -2532,6 +2660,7 @@ def create_app(db_path: Path | None = None) -> Starlette:
         Route("/blockers", blockers),
         Route("/deadlines", deadlines_page),
         Route("/contradictions", contradictions_page),
+        Route("/graph", graph_page),
         Route("/sessions", sessions),
         Route("/projections", projections),
         Route("/dashboard", dashboard),
@@ -2556,6 +2685,7 @@ _NAV_LINKS: list[tuple[str, str, str]] = [
     ("/blockers", "Blockers", "blocker"),
     ("/deadlines", "Deadlines", "meeting"),
     ("/contradictions", "Contradictions", "decision"),
+    ("/graph", "Graph", "bolt"),
     ("/people", "People", "inbox"),
     ("/sessions", "Sessions", "meeting"),
     ("/projections", "Projections", "bolt"),
