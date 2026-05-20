@@ -200,6 +200,129 @@
   footer { padding: 40px 0 80px; }
   footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; color: var(--text-faint); font-size: 13px; }
 
+  /* product UI preview — a faithful mockup of the web UI */
+  .ui-preview {
+    margin-top: 48px;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--bg-card);
+    box-shadow: 0 12px 48px rgba(0,0,0,.35);
+  }
+  .ui-chrome {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .ui-chrome .dotbtn { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+  .ui-chrome .addr {
+    margin-left: 10px; font-size: 12px; color: var(--text-faint);
+    font-family: "JetBrains Mono", monospace;
+  }
+  .ui-mock { display: grid; grid-template-columns: 180px 1fr 1.1fr; min-height: 380px; }
+  .ui-col { padding: 16px; }
+  .ui-sidebar { border-right: 1px solid var(--border); background: var(--bg-elev); }
+  .ui-list { border-right: 1px solid var(--border); }
+  .ui-nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 7px; font-size: 13px; color: var(--text-dim);
+    margin-bottom: 2px;
+  }
+  .ui-nav-item.active { background: var(--bg-card); color: var(--text); font-weight: 600; }
+  .ui-nav-item .nav-dot { width: 7px; height: 7px; border-radius: 2px; }
+  .ui-nav-item .ct { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+  .ui-section-label {
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-faint); margin: 16px 0 6px;
+  }
+  .ui-row {
+    padding: 10px; border-radius: 9px; border: 1px solid transparent;
+    margin-bottom: 4px;
+  }
+  .ui-row.sel { background: var(--bg-elev); border-color: var(--border); }
+  .ui-row-top { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+  .ui-pill {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px;
+  }
+  .ui-pill.commit { background: rgba(167,139,250,.16); color: var(--accent-strong); }
+  .ui-pill.decide { background: rgba(94,234,212,.16); color: var(--teal); }
+  .ui-pill.question { background: rgba(252,211,77,.16); color: var(--amber); }
+  .ui-pill.blocker { background: rgba(253,164,175,.16); color: var(--rose); }
+  .ui-row-title { font-size: 13px; font-weight: 500; color: var(--text); }
+  .ui-row-sub { font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+  .ui-detail-eyebrow {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; color: var(--text-faint); margin-bottom: 10px;
+  }
+  .ui-detail h4 { font-size: 17px; margin: 0 0 14px; line-height: 1.35; letter-spacing: -0.01em; }
+  .ui-quote {
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 14px; background: var(--code-bg);
+  }
+  .ui-quote-label {
+    display: flex; gap: 7px; align-items: center;
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--accent-strong); margin-bottom: 8px;
+  }
+  .ui-quote-label .lock { font-weight: 700; }
+  .ui-quote-text { font-size: 14px; color: var(--text); line-height: 1.5; }
+  .ui-quote-attr { font-size: 11px; color: var(--text-faint); margin-top: 8px; }
+  .ui-props { margin-top: 14px; display: grid; gap: 7px; }
+  .ui-prop { display: flex; justify-content: space-between; font-size: 12px; }
+  .ui-prop .k { color: var(--text-faint); }
+  .ui-prop .v { color: var(--text-dim); }
+
+  /* how it works — 3 steps */
+  .steps { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .step {
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px; background: var(--bg-card); position: relative;
+  }
+  .step-num {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #0b0b10; font-weight: 800; font-size: 15px;
+    margin-bottom: 14px;
+  }
+  .step h3 { margin: 0 0 7px; font-size: 16px; }
+  .step p { margin: 0; color: var(--text-dim); font-size: 14px; }
+  .step code {
+    display: inline-block; margin-top: 10px; font-size: 12px;
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: 4px 8px; border-radius: 6px; color: var(--accent-strong);
+  }
+
+  /* positioning */
+  .positioning { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  .pos-col {
+    border: 1px solid var(--border); border-radius: 14px; padding: 22px;
+    background: var(--bg-card);
+  }
+  .pos-col h3 { margin: 0 0 12px; font-size: 15px; }
+  .pos-col ul { margin: 0; padding-left: 18px; }
+  .pos-col li { color: var(--text-dim); font-size: 14px; margin-bottom: 8px; }
+  .pos-col.them { opacity: 0.78; }
+  .pos-col.them .x { color: var(--rose); }
+  .pos-col.us .c { color: var(--teal); }
+
+  /* faq */
+  .faq-item {
+    border-bottom: 1px solid var(--border); padding: 20px 0;
+  }
+  .faq-item:first-child { border-top: 1px solid var(--border); }
+  .faq-q { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+  .faq-a { color: var(--text-dim); font-size: 14px; margin: 0; }
+  .faq-a code {
+    background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+  }
+
+  @media (max-width: 760px) {
+    .ui-mock { grid-template-columns: 1fr; }
+    .ui-sidebar, .ui-list { border-right: none; border-bottom: 1px solid var(--border); }
+    .positioning { grid-template-columns: 1fr; }
+  }
   @media (max-width: 640px) {
     header.hero { padding: 56px 0 40px; }
     h1 { font-size: 38px; }
@@ -217,7 +340,9 @@
       <span>verbatim</span>
     </div>
     <div>
+      <a class="navlink" href="#how">How it works</a>
       <a class="navlink" href="#features">Features</a>
+      <a class="navlink" href="#faq">FAQ</a>
       <a class="navlink" href="#install">Install</a>
       <a class="navlink" href="https://github.com/qatcod/verbatim">GitHub</a>
     </div>
@@ -229,10 +354,11 @@
     <span class="eyebrow"><span class="pulse"></span> v0.11.2 · open source · MIT</span>
     <h1>The <span class="grad">AI memory layer</span> for engineering teams.</h1>
     <p class="lede">
-      Verbatim turns meeting transcripts into a structured, queryable record of
-      every commitment, decision, open question, and blocker — each one sourced
-      to an exact verbatim quote. Slack, GitHub, Linear, Jira, daemon mode,
-      local LLMs. <strong>Free forever.</strong>
+      Verbatim turns meetings, Slack threads, PRs, and calendar events into a
+      structured, queryable record of every commitment, decision, open
+      question, and blocker — each one sourced to an exact verbatim quote. Then
+      it tells you what's overdue, what's gone stale, and which decisions
+      contradict each other. <strong>Open source. Free forever.</strong>
     </p>
     <div class="cta-row">
       <a class="btn primary" href="#install">Install</a>
@@ -262,8 +388,133 @@ Quote:     <span class="quote">"I'll have the CULA prototype shipped by Friday."
 Source:    standup.txt · line 47 · 2026-05-18
 </pre>
     </div>
+
+    <div class="ui-preview">
+      <div class="ui-chrome">
+        <span class="dotbtn"></span><span class="dotbtn"></span><span class="dotbtn"></span>
+        <span class="addr">localhost:8765 — verbatim serve</span>
+      </div>
+      <div class="ui-mock">
+        <div class="ui-col ui-sidebar">
+          <div class="ui-section-label">Workspace</div>
+          <div class="ui-nav-item active">
+            <span class="nav-dot" style="background:var(--accent)"></span>
+            Commitments <span class="ct">12</span>
+          </div>
+          <div class="ui-nav-item">
+            <span class="nav-dot" style="background:var(--teal)"></span>
+            Decisions <span class="ct">8</span>
+          </div>
+          <div class="ui-nav-item">
+            <span class="nav-dot" style="background:var(--amber)"></span>
+            Questions <span class="ct">5</span>
+          </div>
+          <div class="ui-nav-item">
+            <span class="nav-dot" style="background:var(--rose)"></span>
+            Blockers <span class="ct">3</span>
+          </div>
+          <div class="ui-section-label">Proactive</div>
+          <div class="ui-nav-item">Deadlines <span class="ct">2</span></div>
+          <div class="ui-nav-item">Contradictions <span class="ct">1</span></div>
+          <div class="ui-nav-item">People</div>
+        </div>
+        <div class="ui-col ui-list">
+          <div class="ui-row sel">
+            <div class="ui-row-top">
+              <span class="ui-pill commit">Commitment</span>
+            </div>
+            <div class="ui-row-title">Ship the CULA prototype</div>
+            <div class="ui-row-sub">Qat · due Friday · 92% confidence</div>
+          </div>
+          <div class="ui-row">
+            <div class="ui-row-top">
+              <span class="ui-pill decide">Decision</span>
+            </div>
+            <div class="ui-row-title">Use Kafka for the replay cache</div>
+            <div class="ui-row-sub">Taz, Qat · merged from 2 sources</div>
+          </div>
+          <div class="ui-row">
+            <div class="ui-row-top">
+              <span class="ui-pill blocker">Blocker</span>
+            </div>
+            <div class="ui-row-title">Public launch — security review</div>
+            <div class="ui-row-sub">Qat · open 4 days</div>
+          </div>
+          <div class="ui-row">
+            <div class="ui-row-top">
+              <span class="ui-pill question">Question</span>
+            </div>
+            <div class="ui-row-title">Who owns the m2w domain config?</div>
+            <div class="ui-row-sub">raised by Jason</div>
+          </div>
+        </div>
+        <div class="ui-col ui-detail">
+          <div class="ui-detail-eyebrow">
+            <span class="ui-pill commit">Commitment</span>
+            <span>·</span><span>VRB-a1b2c3d4</span>
+          </div>
+          <h4>Qat — ship the CULA prototype by end of day Friday</h4>
+          <div class="ui-quote">
+            <div class="ui-quote-label">
+              <span class="lock">verbatim</span>
+              <span>exact words from source · evidence locked</span>
+            </div>
+            <div class="ui-quote-text">
+              "I'll have the CULA prototype shipped by Friday."
+            </div>
+            <div class="ui-quote-attr">Qat · #engineering · 3 days ago</div>
+          </div>
+          <div class="ui-props">
+            <div class="ui-prop"><span class="k">Owner</span><span class="v">Qat</span></div>
+            <div class="ui-prop"><span class="k">Due</span><span class="v">Friday</span></div>
+            <div class="ui-prop"><span class="k">Status</span><span class="v">confirmed</span></div>
+            <div class="ui-prop"><span class="k">Confidence</span><span class="v">92% · high</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="section-lede">
+      Three moving parts: ingest from where work happens, extract with a
+      quote contract, act on what the state graph knows.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Ingest</h3>
+        <p>
+          Point Verbatim at a transcript, a Slack workspace, GitHub PRs, or a
+          calendar. It runs continuously in daemon mode, or one-shot from the CLI.
+        </p>
+        <code>verbatim ingest standup.txt</code>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Extract</h3>
+        <p>
+          Claude (or a local model) pulls out commitments, decisions, questions,
+          and blockers. Every item must cite the exact quote that produced it —
+          no quote, no claim.
+        </p>
+        <code>4 items · each sourced</code>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Act</h3>
+        <p>
+          Query it, browse the web UI, project to Linear / Jira / GitHub, or let
+          it nudge you in Slack about what's overdue, stale, or contradictory.
+        </p>
+        <code>verbatim slack-bot nudge #team</code>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section id="features">
   <div class="wrap">
@@ -305,14 +556,46 @@ Source:    standup.txt · line 47 · 2026-05-18
       bridges into the tools you already use.
     </p>
     <div class="features">
-      <div class="feat"><h3><span class="ico">⌘</span> CLI &amp; web UI</h3><p>Linear-style three-pane browser, dark / light theme, full-text and entity-type filters.</p></div>
-      <div class="feat"><h3><span class="ico">⌬</span> Slack HITL</h3><p>Confirm, dismiss, edit, reassign — straight from a Block Kit card in the channel.</p></div>
-      <div class="feat"><h3><span class="ico">⎔</span> Daemon mode</h3><p>Watches a folder, ingests new transcripts, posts a digest. Set and forget.</p></div>
+      <div class="feat"><h3><span class="ico">◷</span> Proactive layer</h3><p>Overdue + due-soon tracking, staleness detection, contradiction detection, auto-standup. It tells you — you don't have to ask.</p></div>
+      <div class="feat"><h3><span class="ico">⌘</span> CLI &amp; web UI</h3><p>Linear-style three-pane browser, dark / light theme, full-text and entity-type filters, per-person views.</p></div>
+      <div class="feat"><h3><span class="ico">⌬</span> Slack HITL</h3><p>Confirm, dismiss, edit, reassign — straight from a Block Kit card. Every action audit-logged.</p></div>
+      <div class="feat"><h3><span class="ico">⎔</span> Daemon mode</h3><p>Watches a folder or Slack, ingests new material, posts digests and nudges. Set and forget.</p></div>
       <div class="feat"><h3><span class="ico">⌗</span> MCP server</h3><p>Plug Verbatim's memory into Claude, Claude Code, or any MCP-aware agent.</p></div>
       <div class="feat"><h3><span class="ico">⇄</span> Projections</h3><p>Sync commitments to GitHub Issues, Jira, or Linear with one command.</p></div>
       <div class="feat"><h3><span class="ico">◐</span> Local LLM</h3><p>Anthropic Claude by default — or any tool-calling model via Ollama. $0, air-gapped.</p></div>
-      <div class="feat"><h3><span class="ico">$</span> Cost guardrails</h3><p>Per-model spend tracking, daily budget caps, dry-run mode before any paid call.</p></div>
-      <div class="feat"><h3><span class="ico">⛬</span> Ingest anywhere</h3><p>Slack live API, Slack export ZIP, GitHub PR discussions, plain transcripts.</p></div>
+      <div class="feat"><h3><span class="ico">⛬</span> Ingest anywhere</h3><p>Meeting transcripts, Slack (live + export), GitHub PRs, Google &amp; Outlook calendars.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Not another AI notetaker</h2>
+    <p class="section-lede">
+      Notetakers summarize one meeting and forget it. Verbatim is a memory
+      layer — continuous, multi-source, and answerable by your agents.
+    </p>
+    <div class="positioning">
+      <div class="pos-col them">
+        <h3>Typical AI notetaker</h3>
+        <ul>
+          <li><span class="x">✕</span> Summarizes a single meeting, then the notes go stale in an inbox.</li>
+          <li><span class="x">✕</span> Meeting-only — misses the decisions made in Slack and PRs.</li>
+          <li><span class="x">✕</span> Action items with no source — you can't tell what's real.</li>
+          <li><span class="x">✕</span> Closed SaaS. Your transcripts live on someone else's server.</li>
+          <li><span class="x">✕</span> Passive. It never tells you a commitment slipped.</li>
+        </ul>
+      </div>
+      <div class="pos-col us">
+        <h3>Verbatim</h3>
+        <ul>
+          <li><span class="c">✓</span> Continuous state — reconciled across every conversation.</li>
+          <li><span class="c">✓</span> Meetings, Slack, GitHub PRs, calendars — one record.</li>
+          <li><span class="c">✓</span> Every item carries the exact quote that produced it.</li>
+          <li><span class="c">✓</span> Open source, self-hosted, bring your own model.</li>
+          <li><span class="c">✓</span> Proactive — nudges you on overdue, stale, contradictory items.</li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
@@ -331,13 +614,73 @@ verbatim init
 verbatim ingest meeting.txt
 
 <span class="com"># browse the web UI on localhost:8765</span>
-verbatim web
+verbatim serve
 
 <span class="com"># or run fully local on Ollama, no API key required</span>
 verbatim ingest meeting.txt --model ollama:llama3.1:8b</pre>
     <div class="cta-row">
       <a class="btn primary" href="https://github.com/qatcod/verbatim">Source on GitHub →</a>
       <a class="btn" href="https://pypi.org/project/verbatim-ai/">PyPI</a>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <p class="section-lede">The questions that come up first.</p>
+    <div class="faq-item">
+      <p class="faq-q">Is it really free?</p>
+      <p class="faq-a">
+        Yes — MIT licensed, open source, no paid tier. You bring your own LLM
+        key (or run a local model on Ollama for $0). The only cost is whatever
+        your model provider charges for tokens, and Verbatim ships cost
+        guardrails to cap that.
+      </p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Where does my data go?</p>
+      <p class="faq-a">
+        Nowhere you don't control. State lives in a local SQLite file.
+        Transcripts are sent only to the LLM you configure — and with
+        <code>--model ollama:…</code> they never leave your machine at all.
+        Meeting transcripts are the most sensitive corpus a company owns;
+        Verbatim is built to be self-hosted from day one.
+      </p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">What's the "verbatim quote" contract?</p>
+      <p class="faq-a">
+        Every extracted item — every commitment, decision, question, blocker —
+        must carry the exact words from the source that produced it. If the
+        model can't quote it, it can't claim it. That's how you trust the
+        output instead of re-watching the meeting.
+      </p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Do I have to use Claude?</p>
+      <p class="faq-a">
+        No. Anthropic Claude is the default, but any tool-calling model served
+        by Ollama works — <code>llama3.1</code>, <code>qwen2.5</code>,
+        <code>mistral-small</code>. Set <code>VERBATIM_MODEL</code> and go.
+      </p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">How do I get it into my team's workflow?</p>
+      <p class="faq-a">
+        Run the Slack bot — your team queries state with <code>/verbatim</code>,
+        triages extractions with Confirm / Dismiss / Edit / Reassign buttons,
+        and gets deadline nudges. Or wire the MCP server into Claude Code so
+        any agent can read team state as a tool.
+      </p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Does it replace Linear / Jira?</p>
+      <p class="faq-a">
+        No — it projects into them. Your tracker stays the source of truth for
+        <em>work</em>; Verbatim is the source of truth for <em>team state</em>,
+        and pushes the relevant slices into the tools you already use.
+      </p>
     </div>
   </div>
 </section>
