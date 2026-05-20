@@ -2543,6 +2543,76 @@ def unlink_cmd(
         err_console.print(f"[yellow]{full_id[:8]}… was already canonical[/yellow]")
 
 
+@app.command(name="relate")
+def relate_cmd(
+    from_id: str = typer.Argument(..., help="The 'from' entity (id or prefix)."),
+    to_id: str = typer.Argument(..., help="The 'to' entity (id or prefix)."),
+    rel_type: str = typer.Option(
+        "relates-to", "--type", "-t",
+        help="resolves | answers | supersedes | blocks | relates-to.",
+    ),
+    note: str | None = typer.Option(None, "--note"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Create a typed relationship between two entities.
+
+    Unlike `link` (which merges duplicates), `relate` records a typed edge
+    between two *distinct* entities — e.g. a commitment that `resolves` a
+    blocker, or a decision that `answers` an open question.
+    """
+    conn = state.open_db(db)
+    try:
+        full_from = _resolve_id_prefix(conn, from_id)
+        full_to = _resolve_id_prefix(conn, to_id)
+        if full_from is None:
+            err_console.print(f"[red]No entity matches prefix '{from_id}'.[/red]")
+            raise typer.Exit(code=1)
+        if full_to is None:
+            err_console.print(f"[red]No entity matches prefix '{to_id}'.[/red]")
+            raise typer.Exit(code=1)
+        try:
+            store.add_relationship(
+                conn, from_entity_id=full_from, to_entity_id=full_to,
+                rel_type=rel_type, note=note,
+            )
+        except store.RelationshipError as e:
+            err_console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2) from None
+    finally:
+        conn.close()
+    console.print(
+        f"[green]✓[/green] VRB-{full_from[:8]} [bold]{rel_type}[/bold] VRB-{full_to[:8]}"
+    )
+
+
+@app.command(name="unrelate")
+def unrelate_cmd(
+    from_id: str = typer.Argument(..., help="The 'from' entity (id or prefix)."),
+    to_id: str = typer.Argument(..., help="The 'to' entity (id or prefix)."),
+    rel_type: str | None = typer.Option(
+        None, "--type", "-t", help="Only remove this type; omit to remove all."
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Remove relationship(s) between two entities."""
+    conn = state.open_db(db)
+    try:
+        full_from = _resolve_id_prefix(conn, from_id)
+        full_to = _resolve_id_prefix(conn, to_id)
+        if full_from is None or full_to is None:
+            err_console.print("[red]One or both entity prefixes didn't resolve.[/red]")
+            raise typer.Exit(code=1)
+        removed = store.remove_relationship(
+            conn, from_entity_id=full_from, to_entity_id=full_to, rel_type=rel_type,
+        )
+    finally:
+        conn.close()
+    if removed:
+        console.print(f"[green]✓[/green] removed {removed} relationship(s)")
+    else:
+        err_console.print("[yellow]No matching relationship to remove.[/yellow]")
+
+
 @app.command(name="show")
 def show_cmd(
     entity_id: str = typer.Argument(..., help="Entity id (or prefix) to display."),
@@ -2556,6 +2626,7 @@ def show_cmd(
             err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
             raise typer.Exit(code=1)
         entity = state.show_entity(conn, full_id)
+        rels = store.fetch_relationships(conn, full_id) if entity else None
     finally:
         conn.close()
 
@@ -2564,6 +2635,33 @@ def show_cmd(
         raise typer.Exit(code=1)
 
     _print_entity_detail(entity)
+    _print_relationships(rels)
+
+
+def _print_relationships(rels: dict | None) -> None:
+    if not rels or (not rels["outgoing"] and not rels["incoming"]):
+        return
+
+    def _summary(e: dict) -> str:
+        p = e.get("payload") or {}
+        return (
+            p.get("deliverable") or p.get("topic")
+            or p.get("question") or p.get("blocked_thing") or e["kind"]
+        )
+
+    console.print("\n[bold]Relationships:[/bold]")
+    for item in rels["outgoing"]:
+        e = item["entity"]
+        console.print(
+            f"  → [bold]{item['rel_type']}[/bold] "
+            f"VRB-{e['id'][:8]} ({e['kind']}: {_summary(e)})"
+        )
+    for item in rels["incoming"]:
+        e = item["entity"]
+        console.print(
+            f"  ← VRB-{e['id'][:8]} ({e['kind']}: {_summary(e)}) "
+            f"[bold]{item['rel_type']}[/bold] this"
+        )
 
 
 @app.command(name="audit")

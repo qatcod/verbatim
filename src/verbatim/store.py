@@ -103,7 +103,32 @@ CREATE TABLE IF NOT EXISTS entity_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON entity_audit(entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON entity_audit(created_at);
+
+CREATE TABLE IF NOT EXISTS entity_relationships (
+    id TEXT PRIMARY KEY,
+    from_entity_id TEXT NOT NULL,
+    to_entity_id TEXT NOT NULL,
+    rel_type TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (from_entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rel_from ON entity_relationships(from_entity_id);
+CREATE INDEX IF NOT EXISTS idx_rel_to ON entity_relationships(to_entity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rel_unique
+    ON entity_relationships(from_entity_id, to_entity_id, rel_type);
 """
+
+# Controlled vocabulary for typed edges between entities. Direction matters
+# for all but `relates-to`.
+RELATIONSHIP_TYPES = {
+    "resolves": "resolves",          # e.g. a commitment resolves a blocker
+    "answers": "answers",            # e.g. a decision answers an open question
+    "supersedes": "supersedes",      # e.g. a newer decision supersedes an older one
+    "blocks": "blocks",              # e.g. a blocker blocks a commitment
+    "relates-to": "relates-to",      # generic, non-directional association
+}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -147,6 +172,32 @@ def _migrate(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_audit_created ON entity_audit(created_at)"
+    )
+
+    # entity_relationships table (added in v0.12.1).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entity_relationships (
+            id TEXT PRIMARY KEY,
+            from_entity_id TEXT NOT NULL,
+            to_entity_id TEXT NOT NULL,
+            rel_type TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (from_entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_entity_id) REFERENCES entities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rel_from ON entity_relationships(from_entity_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rel_to ON entity_relationships(to_entity_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_rel_unique "
+        "ON entity_relationships(from_entity_id, to_entity_id, rel_type)"
     )
 
 
@@ -600,6 +651,119 @@ def fetch_stale_entities(
             entity["sources"].extend(fetch_sources(conn, mid))
         entity["last_activity"] = last
         out.append(entity)
+    return out
+
+
+# ----------------------- entity relationships -----------------------
+
+
+class RelationshipError(ValueError):
+    """Raised when a relationship can't be created (bad type, self-link, …)."""
+
+
+def add_relationship(
+    conn: sqlite3.Connection,
+    *,
+    from_entity_id: str,
+    to_entity_id: str,
+    rel_type: str,
+    note: str | None = None,
+) -> str:
+    """Create a typed edge from one entity to another. Returns the row id.
+
+    Raises RelationshipError for an unknown `rel_type`, a self-link, or a
+    missing endpoint. The (from, to, type) triple is unique — re-adding the
+    same edge raises rather than duplicating.
+    """
+    if rel_type not in RELATIONSHIP_TYPES:
+        raise RelationshipError(
+            f"Unknown relationship type '{rel_type}'. "
+            f"Valid: {', '.join(sorted(RELATIONSHIP_TYPES))}."
+        )
+    if from_entity_id == to_entity_id:
+        raise RelationshipError("An entity can't be related to itself.")
+    for eid in (from_entity_id, to_entity_id):
+        if fetch_entity(conn, eid) is None:
+            raise RelationshipError(f"Entity not found: {eid}")
+    existing = conn.execute(
+        "SELECT id FROM entity_relationships "
+        "WHERE from_entity_id = ? AND to_entity_id = ? AND rel_type = ?",
+        (from_entity_id, to_entity_id, rel_type),
+    ).fetchone()
+    if existing is not None:
+        raise RelationshipError(
+            f"That `{rel_type}` relationship already exists."
+        )
+    rel_id = new_id()
+    conn.execute(
+        "INSERT INTO entity_relationships "
+        "(id, from_entity_id, to_entity_id, rel_type, note, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (rel_id, from_entity_id, to_entity_id, rel_type, note, utc_now_iso()),
+    )
+    return rel_id
+
+
+def remove_relationship(
+    conn: sqlite3.Connection,
+    *,
+    from_entity_id: str,
+    to_entity_id: str,
+    rel_type: str | None = None,
+) -> int:
+    """Delete relationship rows between two entities. Returns rows removed.
+
+    With `rel_type` omitted, removes every edge between the pair.
+    """
+    if rel_type:
+        cur = conn.execute(
+            "DELETE FROM entity_relationships "
+            "WHERE from_entity_id = ? AND to_entity_id = ? AND rel_type = ?",
+            (from_entity_id, to_entity_id, rel_type),
+        )
+    else:
+        cur = conn.execute(
+            "DELETE FROM entity_relationships "
+            "WHERE from_entity_id = ? AND to_entity_id = ?",
+            (from_entity_id, to_entity_id),
+        )
+    return cur.rowcount
+
+
+def fetch_relationships(
+    conn: sqlite3.Connection, entity_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return relationships touching `entity_id`, split by direction.
+
+    `outgoing`: edges where this entity is the `from` side.
+    `incoming`: edges where this entity is the `to` side.
+    Each item carries `rel_type`, `note`, `created_at`, and `entity` — the
+    *other* entity, fetched fresh.
+    """
+    out: dict[str, list[dict[str, Any]]] = {"outgoing": [], "incoming": []}
+    rows = conn.execute(
+        """
+        SELECT id, from_entity_id, to_entity_id, rel_type, note, created_at
+        FROM entity_relationships
+        WHERE from_entity_id = ? OR to_entity_id = ?
+        ORDER BY created_at ASC
+        """,
+        (entity_id, entity_id),
+    ).fetchall()
+    for r in rows:
+        is_outgoing = r["from_entity_id"] == entity_id
+        other_id = r["to_entity_id"] if is_outgoing else r["from_entity_id"]
+        other = fetch_entity(conn, other_id)
+        if other is None:
+            continue
+        item = {
+            "id": r["id"],
+            "rel_type": r["rel_type"],
+            "note": r["note"],
+            "created_at": r["created_at"],
+            "entity": other,
+        }
+        out["outgoing" if is_outgoing else "incoming"].append(item)
     return out
 
 

@@ -1697,6 +1697,7 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
     )
 
     audit_html = _render_audit_trail(entity.get("audit") or [])
+    rel_html = _render_relationships(entity.get("relationships"))
 
     return f"""
 <section class="detail" id="main-content">
@@ -1725,6 +1726,7 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
       <h1 class="entity-title">{html.escape(summary)}</h1>
       {quote_hero}
       {more_quotes_html}
+      {rel_html}
       {audit_html}
     </div>
     <aside class="detail-side">
@@ -1752,6 +1754,45 @@ _AUDIT_ACTION_LABEL = {
     "merge": "Merged",
     "unlink": "Unlinked",
 }
+
+
+def _render_relationships(rels: dict[str, list[dict[str, Any]]] | None) -> str:
+    """Render typed relationships to/from this entity as a linked list."""
+    if not rels or (not rels.get("outgoing") and not rels.get("incoming")):
+        return ""
+
+    def _summary(e: dict[str, Any]) -> str:
+        p = e.get("payload") or {}
+        return (
+            p.get("deliverable") or p.get("topic")
+            or p.get("question") or p.get("blocked_thing") or e["kind"]
+        )
+
+    items: list[str] = []
+    for item in rels.get("outgoing", []):
+        e = item["entity"]
+        items.append(
+            f'<li class="rel-item"><span class="rel-dir">→</span> '
+            f'<span class="rel-type">{html.escape(item["rel_type"])}</span> '
+            f'<a href="/entity/{html.escape(e["id"])}">'
+            f'{html.escape(_summary(e))}</a> '
+            f'<span class="rel-kind">{html.escape(e["kind"])}</span></li>'
+        )
+    for item in rels.get("incoming", []):
+        e = item["entity"]
+        items.append(
+            f'<li class="rel-item"><span class="rel-dir">←</span> '
+            f'<a href="/entity/{html.escape(e["id"])}">'
+            f'{html.escape(_summary(e))}</a> '
+            f'<span class="rel-type">{html.escape(item["rel_type"])}</span> this '
+            f'<span class="rel-kind">{html.escape(e["kind"])}</span></li>'
+        )
+    return (
+        '<div class="rel-block">'
+        '<h3 class="audit-h">Related items</h3>'
+        '<ul class="rel-list">' + "".join(items) + "</ul>"
+        "</div>"
+    )
 
 
 def _render_audit_trail(audit: list[dict[str, Any]]) -> str:
@@ -1911,6 +1952,7 @@ async def entity_detail(request: Request) -> HTMLResponse:
         if entity:
             _enrich_entity_with_session(conn, entity)
             entity["audit"] = store.fetch_audit(conn, entity["id"])
+            entity["relationships"] = store.fetch_relationships(conn, entity["id"])
         counts = _all_counts(conn) if entity else {}
     finally:
         conn.close()

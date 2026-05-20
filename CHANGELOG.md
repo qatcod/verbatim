@@ -2,6 +2,47 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.12.1] — 2026-05-21
+
+### Added — Entity relationships
+
+Until now the state graph was a flat list. v0.12.1 adds typed edges between
+entities — a commitment that *resolves* a blocker, a decision that
+*answers* an open question, a decision that *supersedes* an older one.
+
+New `entity_relationships` table records directed, typed edges. The
+controlled vocabulary: `resolves`, `answers`, `supersedes`, `blocks`,
+`relates-to` (the only non-directional one). Older DBs get the table via
+an additive migration.
+
+**CLI**
+- `verbatim relate <from> <to> --type resolves` — create an edge. Distinct
+  from `link` (which *merges* duplicates); `relate` connects two genuinely
+  *different* entities.
+- `verbatim unrelate <from> <to> [--type T]` — remove edges; omit `--type`
+  to remove all edges between the pair.
+- `verbatim show` now prints a "Relationships" section — outgoing edges
+  (`→ resolves VRB-…`) and incoming edges (`← VRB-… blocks this`).
+
+**Web**
+- Entity-detail pages render a "Related items" block with links to each
+  connected entity, shown only when relationships exist.
+
+Validation rejects unknown types, self-links, missing endpoints, and exact
+duplicates. Edges cascade-delete with their entities.
+
+### Tests
+- 12 new tests in `tests/test_relationships.py`: edge creation, the
+  incoming/outgoing split, every validation path (bad type, self-link,
+  missing entity, duplicate), same-pair-different-type, removal by type and
+  in bulk, FK cascade, and the web entity-detail render.
+
+### Why
+A commitment, a blocker, and the decision that unblocked them are one
+story told in three rooms. Relationships are what make the "state graph"
+an actual graph — and the seam the eventual visual graph view and
+smarter reconciliation will build on.
+
 ## [0.12.0] — 2026-05-21
 
 ### Added — Natural-language ask
