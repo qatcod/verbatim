@@ -2,6 +2,50 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] — 2026-05-21
+
+### Added — Natural-language ask
+
+`verbatim ask "what did we decide about the database?"` — query the state
+graph in plain English instead of picking the right structured command.
+
+New `verbatim.ask` module assembles the current open commitments,
+decisions, questions, and blockers into a compact context block (each item
+with its VRB-id and verbatim quote), hands it to the LLM with the question,
+and returns a grounded answer.
+
+**Grounding contract.** The system prompt forces the model to answer ONLY
+from the provided state, cite `VRB-<id>` references, quote verbatim source
+text, and say "not in the state" rather than invent an answer. Same
+no-source-no-claim principle as the extractor.
+
+**Backend.** Reuses the extractor's Anthropic/Ollama split — `--model
+ollama:…` answers fully locally. Unlike extraction (forced tool call),
+`ask` uses the plain chat endpoints for a free-text answer.
+
+- **CLI**: `verbatim ask <question>` — prints the answer plus a footer
+  (items considered · model · estimated cost).
+- **Slack**: `/verbatim ask <question>` — the bot answers in-channel.
+- **Web UI / MCP**: state was already queryable via MCP; `ask` makes the
+  same capability available without an MCP client.
+
+### Tests
+- 7 new tests in `tests/test_ask.py`: state-context assembly (all four
+  kinds, quotes, VRB-ids, empty DB), Ollama backend dispatch with mocked
+  HTTP, empty-response error path, and the grounding-rule system prompt.
+
+### Changed — landing page
+The landing page got a substantial polish (no version bump of its own —
+it ships continuously via GitHub Pages): a faithful HTML/CSS mockup of the
+web UI, a "How it works" 3-step section, "Not another AI notetaker"
+positioning, and a 6-question FAQ.
+
+### Why
+The structured queries (`query commitments`, `query overdue`, …) are
+precise but you have to know they exist. `ask` is the zero-learning-curve
+front door — and it's the same muscle the MCP server gives agents, now
+available to humans at the CLI and in Slack.
+
 ## [0.11.2] — 2026-05-21
 
 ### Added — Contradiction detection

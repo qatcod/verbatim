@@ -22,6 +22,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from . import __version__, cost, email_digest, state, store, web
+from . import ask as ask_lib
 from . import contradictions as contradictions_lib
 from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
@@ -2605,6 +2606,45 @@ def audit_cmd(
         )
     console.print(f"\n[bold]Activity for[/bold] [cyan]VRB-{full_id[:8]}[/cyan]")
     console.print(table)
+
+
+@app.command(name="ask")
+def ask_cmd(
+    question: list[str] = typer.Argument(
+        ..., help="The question, in plain English. Quote it or just type it.",
+    ),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Ask a natural-language question about your team's tracked state.
+
+    Verbatim assembles the current open commitments, decisions, questions,
+    and blockers, hands them to the LLM with your question, and answers —
+    citing VRB-ids and verbatim quotes. It answers only from the state; if
+    the answer isn't there, it says so.
+    """
+    question_text = " ".join(question).strip()
+    if not question_text:
+        err_console.print("[red]Ask a question, e.g. `verbatim ask \"what's overdue?\"`[/red]")
+        raise typer.Exit(code=2)
+
+    conn = state.open_db(db)
+    try:
+        with err_console.status("[dim]Thinking…[/dim]"):
+            result = ask_lib.answer(conn, question_text, model=model)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Ask failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+    finally:
+        conn.close()
+
+    console.print()
+    console.print(result.answer)
+    spend = cost.estimate_cost(result.model, result.input_tokens, result.output_tokens)
+    console.print(
+        f"\n[dim]{result.entities_considered} items considered · "
+        f"{result.model} · ${spend:.4f}[/dim]"
+    )
 
 
 def _reconcile_preview(

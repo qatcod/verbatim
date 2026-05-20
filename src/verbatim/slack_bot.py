@@ -64,7 +64,7 @@ from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 
-from . import state, store
+from . import ask, state, store
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +114,7 @@ def format_help() -> str:
         "• `/verbatim blockers [owner]` — current blockers\n"
         "• `/verbatim stats` — counts overview\n"
         "• `/verbatim show <id-prefix>` — entity detail with sources\n"
+        "• `/verbatim ask <question>` — ask in plain English\n"
     )
 
 
@@ -775,6 +776,16 @@ def dispatch_command(parsed: ParsedCommand, conn: sqlite3.Connection) -> str:
         if entity is None:
             return f"_Entity not found: `{full_id}`._"
         return format_entity_detail(entity)
+    if sub == "ask":
+        if not parsed.args:
+            return "_Usage: `/verbatim ask <question>`_"
+        question = " ".join(parsed.args)
+        try:
+            result = ask.answer(conn, question)
+        except Exception as e:  # noqa: BLE001
+            log.exception("ask failed")
+            return f"_Couldn't answer that — {e}_"
+        return f":mag: *{_escape_mrkdwn(question)}*\n\n{result.answer}"
 
     return f"_Unknown subcommand `{sub}`._\n\n{format_help()}"
 
