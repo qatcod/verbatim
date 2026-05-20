@@ -1094,3 +1094,46 @@ class VerbatimSlackBot:
                     f"{conf} *{p.get('blocked_thing') or '?'}* blocked by *{p.get('blocked_by') or '?'}*"
                 )
         return "\n".join(sections).rstrip()
+
+    # ----- outbound: deadline nudge -----
+
+    def post_nudge(self, channel: str, *, within_days: int = 7) -> dict[str, Any]:
+        """Post a deadline nudge — overdue + due-soon commitments — to a channel."""
+        conn = state.open_db(self._db_path)
+        try:
+            body = self._render_nudge(conn, within_days=within_days)
+        finally:
+            conn.close()
+        return self._web.chat_postMessage(channel=channel, text=body).data  # type: ignore[no-any-return]
+
+    def _render_nudge(self, conn: sqlite3.Connection, *, within_days: int = 7) -> str:
+        overdue = state.overdue_commitments(conn)
+        due_soon = state.due_soon_commitments(conn, within_days=within_days)
+
+        if not overdue and not due_soon:
+            return (
+                ":white_check_mark: *Verbatim deadline check* — "
+                "nothing overdue, nothing due in the next "
+                f"{within_days} days. All clear."
+            )
+
+        sections = ["*:alarm_clock: Verbatim deadline nudge*", ""]
+        if overdue:
+            sections.append(f"*:rotating_light: Overdue ({len(overdue)}):*")
+            for it in overdue:
+                p = it["payload"]
+                days = abs(it.get("days_until") or 0)
+                actor = _escape_mrkdwn(p.get("actor") or "?")
+                what = _escape_mrkdwn(p.get("deliverable") or "?")
+                sections.append(f"• *{actor}* — {what}  _({days}d overdue)_")
+            sections.append("")
+        if due_soon:
+            sections.append(f"*:hourglass_flowing_sand: Due soon ({len(due_soon)}):*")
+            for it in due_soon:
+                p = it["payload"]
+                days = it.get("days_until")
+                actor = _escape_mrkdwn(p.get("actor") or "?")
+                what = _escape_mrkdwn(p.get("deliverable") or "?")
+                when = "today" if days == 0 else f"in {days}d"
+                sections.append(f"• *{actor}* — {what}  _({when})_")
+        return "\n".join(sections).rstrip()

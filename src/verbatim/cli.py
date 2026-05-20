@@ -1062,6 +1062,74 @@ def query_stats(db: Path | None = typer.Option(None, "--db")) -> None:
     console.print(Panel(body, title="verbatim state", border_style="cyan", expand=False))
 
 
+@query_app.command("overdue")
+def query_overdue(
+    limit: int = typer.Option(200, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """List open commitments whose deadline has already passed."""
+    conn = state.open_db(db)
+    try:
+        items = state.overdue_commitments(conn, limit=limit)
+    finally:
+        conn.close()
+    if not items:
+        console.print("[green]Nothing overdue.[/green] Every dated commitment is still in time.")
+        return
+    _print_deadline_table(items, title="Overdue commitments")
+
+
+@query_app.command("due-soon")
+def query_due_soon(
+    within: int = typer.Option(
+        7, "--within", "-w", help="Day window counted as 'due soon'."
+    ),
+    limit: int = typer.Option(200, "--limit", "-n"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """List open commitments due today or within the next N days."""
+    conn = state.open_db(db)
+    try:
+        items = state.due_soon_commitments(conn, within_days=within, limit=limit)
+    finally:
+        conn.close()
+    if not items:
+        console.print(
+            f"[green]Nothing due in the next {within} days.[/green]"
+        )
+        return
+    _print_deadline_table(items, title=f"Due within {within} days")
+
+
+def _print_deadline_table(items: list[dict[str, Any]], *, title: str) -> None:
+    table = Table(show_header=True, header_style="bold cyan", title=title)
+    table.add_column("id", style="dim", no_wrap=True)
+    table.add_column("when", no_wrap=True)
+    table.add_column("actor")
+    table.add_column("deliverable")
+    table.add_column("deadline")
+    for item in items:
+        payload = item["payload"]
+        days = item.get("days_until")
+        status = item.get("due_status")
+        if status == "overdue":
+            when = f"[red]{abs(days)}d overdue[/red]"
+        elif status == "due_today":
+            when = "[yellow]today[/yellow]"
+        elif days is not None:
+            when = f"[yellow]in {days}d[/yellow]"
+        else:
+            when = "[dim]—[/dim]"
+        table.add_row(
+            item["id"][:8] + "…",
+            when,
+            payload.get("actor") or "—",
+            payload.get("deliverable") or "—",
+            payload.get("deadline") or "—",
+        )
+    console.print(table)
+
+
 @query_app.command("person")
 def query_person(
     name: str = typer.Argument(..., help="Person's name (substring match, case-insensitive)."),
@@ -1676,6 +1744,39 @@ def slack_bot_digest_cmd(
         err_console.print(f"[red]Digest post failed: {e}[/red]")
         raise typer.Exit(code=1) from None
     console.print(f"[green]✓[/green] digest posted to {channel} (ts: {result.get('ts', '?')})")
+
+
+@slack_bot_app.command("nudge")
+def slack_bot_nudge_cmd(
+    channel: str = typer.Argument(
+        ..., help="Channel id or name to post the deadline nudge to.",
+    ),
+    within: int = typer.Option(
+        7, "--within", "-w", help="Day window counted as 'due soon'."
+    ),
+    bot_token: str | None = typer.Option(
+        None, "--bot-token", envvar="SLACK_BOT_TOKEN",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Post a deadline nudge — overdue + due-soon commitments — to a channel.
+
+    Built for cron: a daily or Monday-morning `verbatim slack-bot nudge
+    #team` keeps slipping commitments visible. Web API only — the bot does
+    not need to be running.
+    """
+    if not bot_token:
+        err_console.print("[red]Bot token required.[/red] Set $SLACK_BOT_TOKEN or pass --bot-token.")
+        raise typer.Exit(code=2)
+    bot = slack_bot_lib.VerbatimSlackBot(
+        bot_token=bot_token, app_token="not-needed-for-nudge-only", db_path=db,
+    )
+    try:
+        result = bot.post_nudge(channel, within_days=within)
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[red]Nudge post failed: {e}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(f"[green]✓[/green] deadline nudge posted to {channel} (ts: {result.get('ts', '?')})")
 
 
 @slack_bot_app.command("post-card")

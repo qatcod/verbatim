@@ -1357,7 +1357,12 @@ def _sidebar_html(*, active_filter: str, counts: dict[str, int], search_q: str =
         for icon, label, href, count in workspace_items
     )
 
+    deadline_count = counts.get("overdue", 0)
     activity_html = (
+        '<a href="/deadlines" class="nav-item">'
+        f'<span class="ico">{_ICONS.get("meeting", "")}</span><span>Deadlines</span>'
+        + (f'<span class="count">{deadline_count}</span>' if deadline_count else "")
+        + "</a>"
         '<a href="/people" class="nav-item">'
         f'<span class="ico">{_ICONS.get("inbox", "")}</span><span>People</span>'
         f'<span class="count">{counts.get("people", 0)}</span></a>'
@@ -1795,6 +1800,7 @@ def _all_counts(conn: sqlite3.Connection) -> dict[str, int]:
     out["sessions"] = s.get("sessions", 0)
     out["projections"] = s.get("projections_active", 0)
     out["people"] = len(store.list_known_people(conn, limit=10000))
+    out["overdue"] = len(state.overdue_commitments(conn))
     return out
 
 
@@ -2327,6 +2333,87 @@ async def person_detail(request: Request) -> HTMLResponse:
     )
 
 
+# ----------------------- deadlines -----------------------
+
+
+def _render_deadline_row(item: dict[str, Any]) -> str:
+    payload = item.get("payload") or {}
+    status = item.get("due_status")
+    days = item.get("days_until")
+    if status == "overdue":
+        badge = f'<span class="badge low">{abs(days)}d overdue</span>'
+    elif status == "due_today":
+        badge = '<span class="badge medium">due today</span>'
+    elif days is not None:
+        badge = f'<span class="badge medium">in {days}d</span>'
+    else:
+        badge = '<span class="badge">no date</span>'
+    actor = payload.get("actor") or "—"
+    deliverable = payload.get("deliverable") or "(commitment)"
+    deadline_txt = payload.get("deadline") or ""
+    return (
+        f'<a href="/?id={html.escape(item["id"])}" class="result-row">'
+        f'<span class="result-icon">{_ICONS.get("commit", "")}</span>'
+        '<div class="result-body">'
+        f'<div class="result-title">{html.escape(deliverable)}</div>'
+        f'<div class="result-sub">{badge} · '
+        f'<strong>{html.escape(actor)}</strong>'
+        + (f' · {html.escape(deadline_txt)}' if deadline_txt else "")
+        + "</div></div></a>"
+    )
+
+
+async def deadlines_page(request: Request) -> HTMLResponse:
+    """Overdue + due-soon commitments — the proactive deadline view."""
+    conn = _open_conn()
+    try:
+        counts = _all_counts(conn)
+        overdue = state.overdue_commitments(conn)
+        due_soon = state.due_soon_commitments(conn)
+    finally:
+        conn.close()
+
+    sections: list[str] = []
+    if overdue:
+        rows = "".join(_render_deadline_row(i) for i in overdue)
+        sections.append(
+            '<div class="search-results-group">'
+            f'<h3 style="color:var(--blocker)">Overdue '
+            f'<span class="count">{len(overdue)}</span></h3>'
+            f"{rows}</div>"
+        )
+    if due_soon:
+        rows = "".join(_render_deadline_row(i) for i in due_soon)
+        sections.append(
+            '<div class="search-results-group">'
+            f'<h3 style="color:var(--question)">Due soon '
+            f'<span class="count">{len(due_soon)}</span></h3>'
+            f"{rows}</div>"
+        )
+    if not sections:
+        sections.append(
+            '<div class="list-empty">'
+            '<div class="empty-title">Nothing overdue or due soon</div>'
+            "<div>Every dated commitment is still in time.</div>"
+            "</div>"
+        )
+
+    total = len(overdue) + len(due_soon)
+    inner = (
+        '<main id="main-content" class="app-page">'
+        '<h1 class="page-title">Deadlines'
+        f'<span class="page-subtitle">{len(overdue)} overdue · '
+        f'{len(due_soon)} due soon</span></h1>'
+        + "".join(sections)
+        + "</main>"
+    )
+    _ = total
+    return HTMLResponse(
+        _shell("Deadlines", _shell_with_sidebar(inner=inner, counts=counts),
+               body_class="app-inbox")
+    )
+
+
 # ----------------------- app factory -----------------------
 
 
@@ -2338,6 +2425,7 @@ def create_app(db_path: Path | None = None) -> Starlette:
         Route("/decisions", decisions),
         Route("/open-questions", open_questions),
         Route("/blockers", blockers),
+        Route("/deadlines", deadlines_page),
         Route("/sessions", sessions),
         Route("/projections", projections),
         Route("/dashboard", dashboard),
@@ -2360,6 +2448,7 @@ _NAV_LINKS: list[tuple[str, str, str]] = [
     ("/decisions", "Decisions", "decision"),
     ("/open-questions", "Questions", "question"),
     ("/blockers", "Blockers", "blocker"),
+    ("/deadlines", "Deadlines", "meeting"),
     ("/people", "People", "inbox"),
     ("/sessions", "Sessions", "meeting"),
     ("/projections", "Projections", "bolt"),

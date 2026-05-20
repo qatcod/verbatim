@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import reconcile, store
+from . import deadlines, reconcile, store
 from .extractor import ExtractionDiagnostics
 from .schema import (
     Blocker,
@@ -263,6 +264,78 @@ def search(
             "blocker": [], "source_match": [],
         }
     return store.search_entities(conn, q, limit_per_kind=limit_per_kind)
+
+
+# ----------------------- deadline tracking (proactive layer) -----------------------
+
+
+def deadlined_commitments(
+    conn: sqlite3.Connection,
+    *,
+    today: date | None = None,
+    within_days: int = deadlines.DUE_SOON_WINDOW_DAYS,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Open commitments annotated with `deadline_date` and `due_status`.
+
+    Each returned dict is a normal commitment entity plus:
+      - `deadline_date`: a `date` or None (parsed from the free-text deadline)
+      - `due_status`: 'overdue' | 'due_today' | 'due_soon' | 'scheduled' | 'unknown'
+      - `days_until`: signed int day delta, or None when the date didn't parse
+
+    Sorted soonest-first: overdue at the top (most overdue first), then due
+    today, then by ascending deadline; unparseable/undated last.
+    """
+    today = today or date.today()
+    items = store.fetch_entities(
+        conn, kind="commitment", status="open",
+        canonical_only=True, limit=limit,
+    )
+    for item in items:
+        raw = (item.get("payload") or {}).get("deadline") or item.get("deadline")
+        parsed = deadlines.parse_deadline(raw, today=today)
+        item["deadline_date"] = parsed
+        item["due_status"] = deadlines.due_status(
+            parsed, today=today, within_days=within_days,
+        )
+        item["days_until"] = (
+            deadlines.days_until(parsed, today=today) if parsed else None
+        )
+
+    def _sort_key(it: dict[str, Any]) -> tuple[int, int]:
+        d = it.get("deadline_date")
+        if d is None:
+            return (2, 0)  # undated → last
+        return (0, (d - today).days)
+
+    items.sort(key=_sort_key)
+    return items
+
+
+def overdue_commitments(
+    conn: sqlite3.Connection, *, today: date | None = None, limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Open commitments whose parsed deadline is in the past."""
+    return [
+        c for c in deadlined_commitments(conn, today=today, limit=limit)
+        if c["due_status"] == "overdue"
+    ]
+
+
+def due_soon_commitments(
+    conn: sqlite3.Connection,
+    *,
+    today: date | None = None,
+    within_days: int = deadlines.DUE_SOON_WINDOW_DAYS,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Open commitments due today or within `within_days` days."""
+    return [
+        c for c in deadlined_commitments(
+            conn, today=today, within_days=within_days, limit=limit,
+        )
+        if c["due_status"] in ("due_today", "due_soon")
+    ]
 
 
 # Payload serializers — preserve the kind-specific fields not in the

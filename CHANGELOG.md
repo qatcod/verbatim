@@ -2,6 +2,55 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-05-21
+
+### Added — Proactive deadline tracking
+
+Commitments carry free-text deadlines ("Friday", "EOD Wednesday",
+"2026-05-23") but until now nothing watched them. v0.11.0 adds the first
+piece of the proactive layer: Verbatim now knows what's overdue and what's
+due soon.
+
+New `verbatim.deadlines` module resolves free-text deadlines to real dates
+with the stdlib only — ISO dates, weekday names ("Friday" → next Friday),
+"today"/"tomorrow", "next week", "in N days", and month-day forms
+("May 23"). Filler like "EOD", "by", "before" is stripped first. It stays
+conservative: genuinely ambiguous deadlines ("sometime soon") resolve to
+`None` rather than guessing wrong.
+
+`due_status` classifies a parsed deadline as overdue / due_today /
+due_soon / scheduled / unknown.
+
+**CLI**
+- `verbatim query overdue` — open commitments past their deadline.
+- `verbatim query due-soon [--within N]` — commitments due today or within
+  N days (default 7).
+
+**Web**
+- New `/deadlines` page — overdue and due-soon commitments in two sections,
+  with day-delta badges. "Deadlines" now sits in the sidebar with a live
+  overdue count.
+
+**Slack**
+- `verbatim slack-bot nudge <channel> [--within N]` posts a deadline nudge
+  — overdue + due-soon commitments — into a channel. Built for cron: a
+  daily or Monday-morning nudge keeps slipping commitments visible. Web API
+  only; the bot does not need to be running.
+
+### Tests
+- 25 new tests in `tests/test_deadlines.py`: deadline parsing across every
+  supported form (ISO, weekday, relative, month-day, filler-stripping,
+  next-year roll), `due_status` / `days_until` classification, the
+  `state.deadlined / overdue / due_soon_commitments` helpers, and the
+  `/deadlines` web route.
+
+### Why
+This is the start of the proactive layer. A memory tool that only answers
+when asked is a filing cabinet; one that tells you "Qat's CULA commitment
+is 3 days overdue" is a teammate. Deadline tracking is the highest-signal
+proactive feature because the data is already there — every commitment has
+a deadline — it just needed a date parser and somewhere to surface it.
+
 ## [0.10.2] — 2026-05-20
 
 ### Added — Calendar ingest (Google Calendar + Outlook)
