@@ -49,7 +49,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse
 from starlette.routing import Route
 
-from . import state, store
+from . import contradictions, state, store
 
 # ----------------------- DB lifecycle for handlers -----------------------
 
@@ -1358,10 +1358,16 @@ def _sidebar_html(*, active_filter: str, counts: dict[str, int], search_q: str =
     )
 
     deadline_count = counts.get("overdue", 0)
+    contradiction_count = counts.get("contradictions", 0)
     activity_html = (
         '<a href="/deadlines" class="nav-item">'
         f'<span class="ico">{_ICONS.get("meeting", "")}</span><span>Deadlines</span>'
         + (f'<span class="count">{deadline_count}</span>' if deadline_count else "")
+        + "</a>"
+        '<a href="/contradictions" class="nav-item">'
+        f'<span class="ico">{_ICONS.get("decision", "")}</span><span>Contradictions</span>'
+        + (f'<span class="count">{contradiction_count}</span>'
+           if contradiction_count else "")
         + "</a>"
         '<a href="/people" class="nav-item">'
         f'<span class="ico">{_ICONS.get("inbox", "")}</span><span>People</span>'
@@ -1801,6 +1807,7 @@ def _all_counts(conn: sqlite3.Connection) -> dict[str, int]:
     out["projections"] = s.get("projections_active", 0)
     out["people"] = len(store.list_known_people(conn, limit=10000))
     out["overdue"] = len(state.overdue_commitments(conn))
+    out["contradictions"] = len(contradictions.find_contradictions(conn))
     return out
 
 
@@ -2414,6 +2421,62 @@ async def deadlines_page(request: Request) -> HTMLResponse:
     )
 
 
+async def contradictions_page(request: Request) -> HTMLResponse:
+    """Decisions that look like they disagree — same topic, different outcome."""
+    conn = _open_conn()
+    try:
+        counts = _all_counts(conn)
+        pairs = contradictions.find_contradictions(conn)
+    finally:
+        conn.close()
+
+    if not pairs:
+        body_inner = (
+            '<div class="list-empty">'
+            '<div class="empty-title">No contradictions found</div>'
+            "<div>Open decisions are consistent with each other.</div>"
+            "</div>"
+        )
+    else:
+        cards: list[str] = []
+        for c in pairs:
+            pa = c.decision_a.get("payload") or {}
+            pb = c.decision_b.get("payload") or {}
+            cards.append(
+                '<div class="search-results-group">'
+                f'<h3 style="color:var(--question)">{html.escape(c.topic)}'
+                f' <span class="count">{c.topic_score}% topic match</span></h3>'
+                f'<a href="/?id={html.escape(c.decision_a["id"])}" class="result-row">'
+                f'<span class="result-icon">{_ICONS.get("decision", "")}</span>'
+                '<div class="result-body">'
+                f'<div class="result-title">{html.escape(pa.get("outcome") or "—")}</div>'
+                f'<div class="result-sub"><span class="mono">'
+                f'{html.escape(_short_id(c.decision_a["id"]))}</span></div>'
+                "</div></a>"
+                f'<a href="/?id={html.escape(c.decision_b["id"])}" class="result-row">'
+                f'<span class="result-icon">{_ICONS.get("decision", "")}</span>'
+                '<div class="result-body">'
+                f'<div class="result-title">{html.escape(pb.get("outcome") or "—")}</div>'
+                f'<div class="result-sub"><span class="mono">'
+                f'{html.escape(_short_id(c.decision_b["id"]))}</span></div>'
+                "</div></a>"
+                "</div>"
+            )
+        body_inner = "".join(cards)
+
+    inner = (
+        '<main id="main-content" class="app-page">'
+        '<h1 class="page-title">Contradictions'
+        f'<span class="page-subtitle">{len(pairs)} found</span></h1>'
+        + body_inner
+        + "</main>"
+    )
+    return HTMLResponse(
+        _shell("Contradictions", _shell_with_sidebar(inner=inner, counts=counts),
+               body_class="app-inbox")
+    )
+
+
 # ----------------------- app factory -----------------------
 
 
@@ -2426,6 +2489,7 @@ def create_app(db_path: Path | None = None) -> Starlette:
         Route("/open-questions", open_questions),
         Route("/blockers", blockers),
         Route("/deadlines", deadlines_page),
+        Route("/contradictions", contradictions_page),
         Route("/sessions", sessions),
         Route("/projections", projections),
         Route("/dashboard", dashboard),
@@ -2449,6 +2513,7 @@ _NAV_LINKS: list[tuple[str, str, str]] = [
     ("/open-questions", "Questions", "question"),
     ("/blockers", "Blockers", "blocker"),
     ("/deadlines", "Deadlines", "meeting"),
+    ("/contradictions", "Contradictions", "decision"),
     ("/people", "People", "inbox"),
     ("/sessions", "Sessions", "meeting"),
     ("/projections", "Projections", "bolt"),

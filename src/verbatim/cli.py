@@ -22,6 +22,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from . import __version__, cost, email_digest, state, store, web
+from . import contradictions as contradictions_lib
 from . import reconcile as reconcile_lib
 from . import slack_bot as slack_bot_lib
 from .connectors import calendar as calendar_conn
@@ -1128,6 +1129,50 @@ def _print_deadline_table(items: list[dict[str, Any]], *, title: str) -> None:
             payload.get("deadline") or "—",
         )
     console.print(table)
+
+
+@query_app.command("contradictions")
+def query_contradictions(
+    topic_threshold: int = typer.Option(
+        contradictions_lib.DEFAULT_TOPIC_THRESHOLD, "--topic-threshold",
+        min=50, max=100, help="Min topic similarity to consider two decisions related.",
+    ),
+    outcome_threshold: int = typer.Option(
+        contradictions_lib.DEFAULT_OUTCOME_THRESHOLD, "--outcome-threshold",
+        min=0, max=100, help="Max outcome similarity to still count as a conflict.",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Flag decisions that look like they disagree — same topic, different outcome.
+
+    A team that decides 'use Postgres' and later 'use SQLite' on the same
+    topic has a contradiction nobody connected. This surfaces those pairs.
+    """
+    conn = state.open_db(db)
+    try:
+        pairs = contradictions_lib.find_contradictions(
+            conn, topic_threshold=topic_threshold,
+            outcome_threshold=outcome_threshold,
+        )
+    finally:
+        conn.close()
+    if not pairs:
+        console.print("[green]No contradictions found.[/green] Open decisions are consistent.")
+        return
+    console.print(
+        f"\n[bold yellow]{len(pairs)} possible contradiction"
+        f"{'s' if len(pairs) != 1 else ''}[/bold yellow]\n"
+    )
+    for c in pairs:
+        pa, pb = c.decision_a["payload"], c.decision_b["payload"]
+        console.print(f"[bold]Topic:[/bold] {c.topic}  [dim](topic match {c.topic_score}%)[/dim]")
+        console.print(
+            f"  [cyan]VRB-{c.decision_a['id'][:8]}[/cyan] → {pa.get('outcome') or '—'}"
+        )
+        console.print(
+            f"  [cyan]VRB-{c.decision_b['id'][:8]}[/cyan] → {pb.get('outcome') or '—'}"
+        )
+        console.print()
 
 
 @query_app.command("stale")

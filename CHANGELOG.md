@@ -2,6 +2,42 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] — 2026-05-21
+
+### Added — Contradiction detection
+
+A team decides "use Postgres" in one meeting and "use SQLite" two weeks
+later, on the same topic, and nobody connects the two. Verbatim holds both
+decisions — `verbatim query contradictions` now surfaces the conflict.
+
+New `verbatim.contradictions` module flags pairs of open decisions where
+the **topics** are similar (rapidfuzz token-set ratio ≥ 75) but the
+**outcomes** are not (ratio < 55). Same topic + same outcome is a
+duplicate — reconciliation's job; same topic + different outcome is the
+conflict worth a human's attention.
+
+Thresholds are looser than reconciliation's 88 on purpose: a contradiction
+is a prompt to look, not an automatic state change, so a few false
+positives are cheap and a missed conflict is not. `--topic-threshold` /
+`--outcome-threshold` tune the sensitivity.
+
+- **CLI**: `verbatim query contradictions` — lists each conflicting pair
+  with both outcomes and the topic-match score.
+- **Web**: new `/contradictions` page, with a "Contradictions" sidebar
+  entry and a live count.
+
+### Tests
+- 10 new tests in `tests/test_contradictions.py`: same-topic/different-
+  outcome detection, no-flag for identical outcomes (duplicate) or
+  unrelated topics, empty-outcome skipping, resolved-decision exclusion,
+  threshold tuning, and the `/contradictions` web route.
+
+### Why
+This is the proactive layer's hardest-to-spot win. Overdue commitments and
+stale items are visible if you look; a contradiction between two decisions
+made weeks apart is invisible to everyone — no single person was in both
+rooms. Catching it is exactly what a memory layer is *for*.
+
 ## [0.11.1] — 2026-05-21
 
 ### Added — Staleness detection
