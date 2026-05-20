@@ -2,6 +2,47 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.12.3] — 2026-05-21
+
+### Added — Plain-language simplify mode
+
+Verbatim's record is only useful if the reader understands it. A CEO hits
+"blocked on the Cyren tier-3 JWT audience binding" and bounces; an engineer
+hits an accounting-heavy commitment and does the same. Simplify mode
+rewrites either one — acronyms expanded, jargon replaced, every fact kept.
+
+New `verbatim.simplify` module: a one-shot LLM rewrite for a non-technical
+(or just out-of-domain) reader. The prompt forces acronym expansion, plain
+words, and a no-add / no-drop fact contract.
+
+- **CLI**: `verbatim simplify <id>` explains an entity in plain language;
+  `--audience "a CFO"` tunes who it's for. `verbatim ask --simple` answers
+  any question jargon-free.
+- **Slack**: `/verbatim simplify <id-prefix>`.
+- **Web**: a "Simplify" button on every entity-detail page; `?simple=1`
+  renders a plain-language panel above the quote, with a "show original"
+  link back.
+
+### Added — `verbatim.llm` shared completion helper
+
+Factored the Anthropic/Ollama plain-text completion path out of `ask` into
+a shared `verbatim.llm.complete()`. Both `ask` and `simplify` now run on
+it; the extractor's tool-use path is untouched. No behavior change to
+`ask` — same backend dispatch, same results.
+
+### Tests
+- 11 new tests in `tests/test_simplify.py`: `llm.complete` over a mocked
+  Ollama backend, `simplify_text` (empty-input short-circuit, model call,
+  audience threading), `entity_to_text` flattening, `simplify_entity`
+  (missing entity, full flatten-and-rewrite), `ask --simple`, and the web
+  `?simple=1` panel.
+- `tests/test_ask.py` updated for the `llm.py` refactor.
+
+### Why
+"Best product ever" means everyone on the team can use it — not just the
+people who speak the jargon. Simplify is the bridge: the same sourced,
+accurate record, rendered for whoever is reading it.
+
 ## [0.12.2] — 2026-05-21
 
 ### Added — Visual relationship graph

@@ -20,15 +20,10 @@ without tools.
 """
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import dataclass
 
-import httpx
-from anthropic import Anthropic
-
-from . import state
-from .extractor import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, _is_ollama
+from . import llm, state
 
 ASK_SYSTEM_PROMPT = (
     "You are Verbatim's query assistant. You answer questions about a "
@@ -116,6 +111,12 @@ def _entity_block(entity: dict) -> str:
     return line
 
 
+_PLAIN_LANGUAGE_RULE = (
+    "\n- Write the answer in plain language for a non-technical reader: "
+    "expand acronyms, avoid jargon, keep it simple."
+)
+
+
 def answer(
     conn: sqlite3.Connection,
     question: str,
@@ -123,91 +124,28 @@ def answer(
     model: str | None = None,
     api_key: str | None = None,
     max_tokens: int = 1024,
+    plain_language: bool = False,
 ) -> AskResult:
-    """Answer a natural-language question about the current state."""
-    chosen_model = model or os.environ.get("VERBATIM_MODEL") or DEFAULT_MODEL
+    """Answer a natural-language question about the current state.
+
+    With `plain_language=True` the answer is written for a non-technical
+    reader — acronyms expanded, no jargon.
+    """
     context, entity_count = build_state_context(conn)
     user_message = (
         f"STATE:\n{context}\n\n"
         f"QUESTION: {question.strip()}\n\n"
         "Answer the question using only the STATE above."
     )
-    if _is_ollama(chosen_model):
-        return _answer_ollama(
-            chosen_model.removeprefix("ollama:"), user_message,
-            entity_count=entity_count, max_tokens=max_tokens,
-        )
-    return _answer_anthropic(
-        chosen_model, user_message, entity_count=entity_count,
-        max_tokens=max_tokens, api_key=api_key,
+    system = ASK_SYSTEM_PROMPT + (_PLAIN_LANGUAGE_RULE if plain_language else "")
+    result = llm.complete(
+        system, user_message,
+        model=model, api_key=api_key, max_tokens=max_tokens,
     )
-
-
-def _answer_anthropic(
-    chosen_model: str,
-    user_message: str,
-    *,
-    entity_count: int,
-    max_tokens: int,
-    api_key: str | None,
-) -> AskResult:
-    client = Anthropic(api_key=api_key) if api_key else Anthropic()
-    response = client.messages.create(
-        model=chosen_model,
-        max_tokens=max_tokens,
-        system=ASK_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-    text = "".join(
-        getattr(b, "text", "") for b in response.content
-        if getattr(b, "type", None) == "text"
-    ).strip()
     return AskResult(
-        answer=text or "(The model returned an empty answer.)",
-        model=chosen_model,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
-        entities_considered=entity_count,
-    )
-
-
-def _answer_ollama(
-    ollama_model: str,
-    user_message: str,
-    *,
-    entity_count: int,
-    max_tokens: int,
-    http_client: httpx.Client | None = None,
-) -> AskResult:
-    host = os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_HOST).rstrip("/")
-    url = f"{host}/v1/chat/completions"
-    payload = {
-        "model": ollama_model,
-        "messages": [
-            {"role": "system", "content": ASK_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        "max_tokens": max_tokens,
-    }
-    owned = http_client is None
-    client = http_client or httpx.Client(timeout=300.0)
-    try:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-    finally:
-        if owned:
-            client.close()
-
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"Ollama response had no choices: {data!r}")
-    text = (choices[0].get("message", {}).get("content") or "").strip()
-    usage = data.get("usage") or {}
-    return AskResult(
-        answer=text or "(The model returned an empty answer.)",
-        model=f"ollama:{ollama_model}",
-        input_tokens=int(usage.get("prompt_tokens", 0)),
-        output_tokens=int(usage.get("completion_tokens", 0)),
+        answer=result.text,
+        model=result.model,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
         entities_considered=entity_count,
     )

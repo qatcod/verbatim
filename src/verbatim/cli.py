@@ -25,6 +25,7 @@ from . import __version__, cost, email_digest, state, store, web
 from . import ask as ask_lib
 from . import contradictions as contradictions_lib
 from . import reconcile as reconcile_lib
+from . import simplify as simplify_lib
 from . import slack_bot as slack_bot_lib
 from .connectors import calendar as calendar_conn
 from .connectors import github_pr, slack_api, slack_export
@@ -2664,6 +2665,51 @@ def _print_relationships(rels: dict | None) -> None:
         )
 
 
+@app.command(name="simplify")
+def simplify_cmd(
+    entity_id: str = typer.Argument(
+        ..., help="Entity id (or prefix) to explain in plain language."
+    ),
+    audience: str | None = typer.Option(
+        None, "--audience", "-a",
+        help="Who it's for, e.g. 'a CFO', 'a new hire'. Default: general reader.",
+    ),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Explain an entity in plain language — no jargon, acronyms expanded.
+
+    For the non-technical reader (a CEO scanning commitments) and the
+    technical one (an engineer reading a finance item). Same facts, plainer
+    words.
+    """
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_id_prefix(conn, entity_id)
+        if full_id is None:
+            err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
+            raise typer.Exit(code=1)
+        try:
+            with err_console.status("[dim]Simplifying…[/dim]"):
+                result = simplify_lib.simplify_entity(
+                    conn, full_id, audience=audience, model=model,
+                )
+        except Exception as e:  # noqa: BLE001
+            err_console.print(f"[red]Simplify failed: {e}[/red]")
+            raise typer.Exit(code=1) from None
+    finally:
+        conn.close()
+
+    if result is None:
+        err_console.print(f"[red]Entity not found: {full_id}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print()
+    console.print(result.text)
+    spend = cost.estimate_cost(result.model, result.input_tokens, result.output_tokens)
+    console.print(f"\n[dim]{result.model} · ${spend:.4f}[/dim]")
+
+
 @app.command(name="audit")
 def audit_cmd(
     entity_id: str = typer.Argument(..., help="Entity id (or prefix) to show history for."),
@@ -2711,6 +2757,10 @@ def ask_cmd(
     question: list[str] = typer.Argument(
         ..., help="The question, in plain English. Quote it or just type it.",
     ),
+    simple: bool = typer.Option(
+        False, "--simple", "-s",
+        help="Answer in plain language — expand acronyms, drop jargon.",
+    ),
     model: str | None = typer.Option(None, "--model", "-m"),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
@@ -2719,7 +2769,8 @@ def ask_cmd(
     Verbatim assembles the current open commitments, decisions, questions,
     and blockers, hands them to the LLM with your question, and answers —
     citing VRB-ids and verbatim quotes. It answers only from the state; if
-    the answer isn't there, it says so.
+    the answer isn't there, it says so. Pass --simple for a jargon-free
+    answer anyone can follow.
     """
     question_text = " ".join(question).strip()
     if not question_text:
@@ -2729,7 +2780,9 @@ def ask_cmd(
     conn = state.open_db(db)
     try:
         with err_console.status("[dim]Thinking…[/dim]"):
-            result = ask_lib.answer(conn, question_text, model=model)
+            result = ask_lib.answer(
+                conn, question_text, model=model, plain_language=simple,
+            )
     except Exception as e:  # noqa: BLE001
         err_console.print(f"[red]Ask failed: {e}[/red]")
         raise typer.Exit(code=1) from None

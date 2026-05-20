@@ -49,7 +49,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse
 from starlette.routing import Route
 
-from . import contradictions, state, store
+from . import contradictions, simplify, state, store
 from . import graph as graph_mod
 
 # ----------------------- DB lifecycle for handlers -----------------------
@@ -746,6 +746,27 @@ a:hover { color: var(--accent-2); text-decoration: underline; text-underline-off
   font-size: 11.5px; color: var(--accent);
   border: 1px solid var(--border);
 }
+
+/* ===== Plain-language simplify panel ===== */
+.simplify-panel {
+  border: 1px solid var(--accent-rail);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.simplify-label {
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700; margin-bottom: 8px;
+}
+.simplify-text {
+  font-size: 14.5px; line-height: 1.6; color: var(--text);
+}
+.simplify-back {
+  display: inline-block; margin-top: 10px;
+  font-size: 12px; color: var(--text-3);
+}
+.simplify-back:hover { color: var(--text); }
 
 /* ===== Relationship graph ===== */
 .graph-legend {
@@ -1617,7 +1638,9 @@ _KIND_PLURAL = {
 }
 
 
-def _detail_pane_html(entity: dict[str, Any] | None) -> str:
+def _detail_pane_html(
+    entity: dict[str, Any] | None, *, simplified: str | None = None,
+) -> str:
     if entity is None:
         return (
             '<section class="detail" id="main-content">'
@@ -1729,6 +1752,26 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
     audit_html = _render_audit_trail(entity.get("audit") or [])
     rel_html = _render_relationships(entity.get("relationships"))
 
+    eid_esc = html.escape(entity["id"])
+    if simplified is not None:
+        simplified_html = (
+            '<div class="simplify-panel">'
+            '<div class="simplify-label">Plain language</div>'
+            f'<div class="simplify-text">{html.escape(simplified)}</div>'
+            f'<a class="simplify-back" href="/entity/{eid_esc}">← show original</a>'
+            "</div>"
+        )
+        simplify_btn = (
+            f'<a class="hdr-btn primary" href="/entity/{eid_esc}">'
+            "<span>Original</span></a>"
+        )
+    else:
+        simplified_html = ""
+        simplify_btn = (
+            f'<a class="hdr-btn" href="/entity/{eid_esc}?simple=1">'
+            "<span>Simplify</span></a>"
+        )
+
     return f"""
 <section class="detail" id="main-content">
   <header class="detail-header">
@@ -1740,6 +1783,7 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
       <span class="id">{html.escape(short)}</span>
     </div>
     <div class="header-actions">
+      {simplify_btn}
       <a class="hdr-btn" href="/entity/{html.escape(entity["id"])}">
         {_ICONS["link"]}<span>Permalink</span>
       </a>
@@ -1754,6 +1798,7 @@ def _detail_pane_html(entity: dict[str, Any] | None) -> str:
         <span class="id">{html.escape(short)}</span>
       </div>
       <h1 class="entity-title">{html.escape(summary)}</h1>
+      {simplified_html}
       {quote_hero}
       {more_quotes_html}
       {rel_html}
@@ -1976,13 +2021,24 @@ async def _render_inbox(request: Request, *, filter_kind: str, title: str) -> HT
 
 async def entity_detail(request: Request) -> HTMLResponse:
     entity_id = request.path_params["entity_id"]
+    want_simple = request.query_params.get("simple") in ("1", "true", "yes")
     conn = _open_conn()
     try:
         entity = state.show_entity(conn, entity_id)
+        simplified: str | None = None
         if entity:
             _enrich_entity_with_session(conn, entity)
             entity["audit"] = store.fetch_audit(conn, entity["id"])
             entity["relationships"] = store.fetch_relationships(conn, entity["id"])
+            if want_simple:
+                try:
+                    res = simplify.simplify_entity(conn, entity["id"])
+                    simplified = res.text if res else None
+                except Exception:  # noqa: BLE001
+                    simplified = (
+                        "Couldn't generate a plain-language version — "
+                        "check that an LLM model is configured."
+                    )
         counts = _all_counts(conn) if entity else {}
     finally:
         conn.close()
@@ -2000,7 +2056,7 @@ async def entity_detail(request: Request) -> HTMLResponse:
         return HTMLResponse(_shell("Not found", body, body_class=""), status_code=404)
 
     sidebar = _sidebar_html(active_filter=entity["kind"], counts=counts)
-    detail = _detail_pane_html(entity)
+    detail = _detail_pane_html(entity, simplified=simplified)
     body = (
         '<div class="shell" style="grid-template-columns:232px 1fr">'
         f"{sidebar}"

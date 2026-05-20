@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from verbatim import ask, state
+from verbatim import ask, llm, state
 from verbatim.extractor import ExtractionDiagnostics
 from verbatim.schema import (
     Blocker,
@@ -145,16 +145,14 @@ def test_answer_ollama_path(tmp_path: Path, monkeypatch) -> None:
         })
 
     mock_client = httpx.Client(transport=httpx.MockTransport(handler))
-    real_answer_ollama = ask._answer_ollama
+    real_complete_ollama = llm._complete_ollama
 
-    def fake_answer_ollama(model, user_message, *, entity_count, max_tokens,
-                           http_client=None):
-        return real_answer_ollama(
-            model, user_message, entity_count=entity_count,
-            max_tokens=max_tokens, http_client=mock_client,
+    def fake_complete_ollama(model, system, user, *, max_tokens, http_client=None):
+        return real_complete_ollama(
+            model, system, user, max_tokens=max_tokens, http_client=mock_client,
         )
 
-    monkeypatch.setattr(ask, "_answer_ollama", fake_answer_ollama)
+    monkeypatch.setattr(llm, "_complete_ollama", fake_complete_ollama)
 
     conn = state.open_db(db)
     try:
@@ -171,19 +169,16 @@ def test_answer_ollama_path(tmp_path: Path, monkeypatch) -> None:
     assert "Postgres" in captured["body"]
 
 
-def test_answer_ollama_empty_choices_raises(tmp_path: Path) -> None:
-    db = tmp_path / "a.db"
-    _seed(db)
-
+def test_answer_ollama_empty_choices_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})
 
     mock_client = httpx.Client(transport=httpx.MockTransport(handler))
     import pytest
     with pytest.raises(RuntimeError, match="no choices"):
-        ask._answer_ollama(
-            "llama3.1:8b", "STATE\n\nQUESTION: x",
-            entity_count=0, max_tokens=512, http_client=mock_client,
+        llm._complete_ollama(
+            "llama3.1:8b", "sys", "user",
+            max_tokens=512, http_client=mock_client,
         )
 
 

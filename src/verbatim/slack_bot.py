@@ -64,7 +64,7 @@ from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 
-from . import ask, state, store
+from . import ask, simplify, state, store
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +115,7 @@ def format_help() -> str:
         "• `/verbatim stats` — counts overview\n"
         "• `/verbatim show <id-prefix>` — entity detail with sources\n"
         "• `/verbatim ask <question>` — ask in plain English\n"
+        "• `/verbatim simplify <id-prefix>` — explain an item, jargon-free\n"
     )
 
 
@@ -786,6 +787,20 @@ def dispatch_command(parsed: ParsedCommand, conn: sqlite3.Connection) -> str:
             log.exception("ask failed")
             return f"_Couldn't answer that — {e}_"
         return f":mag: *{_escape_mrkdwn(question)}*\n\n{result.answer}"
+    if sub == "simplify":
+        if not parsed.args:
+            return "_Usage: `/verbatim simplify <id-prefix>`_"
+        full_id = _resolve_id_prefix(conn, parsed.args[0])
+        if full_id is None:
+            return f"_No entity matches id prefix `{parsed.args[0]}`._"
+        try:
+            result = simplify.simplify_entity(conn, full_id)
+        except Exception as e:  # noqa: BLE001
+            log.exception("simplify failed")
+            return f"_Couldn't simplify that — {e}_"
+        if result is None:
+            return f"_Entity not found: `{full_id}`._"
+        return f":bulb: *Plain-language* `VRB-{full_id[:8]}`\n\n{result.text}"
 
     return f"_Unknown subcommand `{sub}`._\n\n{format_help()}"
 
