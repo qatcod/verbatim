@@ -45,6 +45,7 @@ SlackApiError on 429; we let it bubble up and surface the cause to the CLI.
 """
 from __future__ import annotations
 
+import http.client
 import time
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -60,6 +61,22 @@ from .slack_common import (
     build_user_map,
     parse_message,
 )
+
+# Transport errors that show up on large workspaces — the response body claims a
+# content-length the server doesn't fully deliver. Retrying with a smaller page
+# size almost always succeeds.
+_TRANSIENT_TRANSPORT = (
+    http.client.IncompleteRead,
+    http.client.RemoteDisconnected,
+    ConnectionResetError,
+    TimeoutError,
+)
+# Page sizes for paginated `*.list` calls. Slack's docs allow 1000 but huge
+# pages routinely truncate against ~1000-channel workspaces. 100 keeps the
+# response bounded; we'll back off to 25 on transport failure.
+_LIST_PAGE = 100
+_LIST_PAGE_SMALL = 25
+_LIST_RETRIES = 3
 
 # Slack API error codes we treat as "this channel is inaccessible, skip it"
 # rather than "the whole run is broken".
@@ -102,68 +119,87 @@ class SlackClient:
 
     # ----- discovery -----
 
+    def _paginated_list(
+        self,
+        api_call: Callable[..., Any],
+        items_key: str,
+        *,
+        base_params: dict[str, Any] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield items from any paginated Slack `*.list` endpoint.
+
+        Handles cursor pagination and retries transient transport failures
+        (Slack truncating responses on 1000+ channel workspaces) with a
+        smaller page size on the retry. Yields one item dict at a time so
+        callers can stop early when they find what they need.
+        """
+        cursor: str | None = None
+        page = _LIST_PAGE
+        while True:
+            params = dict(base_params or {})
+            params["limit"] = page
+            if cursor:
+                params["cursor"] = cursor
+            resp = None
+            for attempt in range(_LIST_RETRIES):
+                try:
+                    resp = api_call(**params)
+                    break
+                except _TRANSIENT_TRANSPORT:
+                    # Half the page size on each retry to fit under the
+                    # truncation threshold.
+                    page = max(_LIST_PAGE_SMALL, page // 2)
+                    params["limit"] = page
+                    if attempt == _LIST_RETRIES - 1:
+                        raise
+                    time.sleep(1.0)
+                except SlackApiError as e:
+                    msg = str(e).lower()
+                    if "incomplete" in msg or "connection" in msg:
+                        page = max(_LIST_PAGE_SMALL, page // 2)
+                        params["limit"] = page
+                        if attempt == _LIST_RETRIES - 1:
+                            raise
+                        time.sleep(1.0)
+                        continue
+                    raise
+            assert resp is not None
+            yield from (resp.get(items_key) or [])
+            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
+            if not cursor:
+                return
+            self._maybe_pause()
+
     def get_users(self) -> dict[str, str]:
         """Fetch and cache user_id → display name for the workspace."""
         if self._users_cache is not None:
             return self._users_cache
-
-        users_raw: list[dict[str, Any]] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, Any] = {"limit": 200}
-            if cursor:
-                params["cursor"] = cursor
-            resp = self._client.users_list(**params)
-            users_raw.extend(resp.get("members") or [])
-            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
-            if not cursor:
-                break
-            self._maybe_pause()
-
+        users_raw = list(self._paginated_list(self._client.users_list, "members"))
         self._users_cache = build_user_map(users_raw)
         return self._users_cache
 
     def list_channel_names(self, *, include_private: bool = False) -> list[str]:
         """All channels the token has access to (public; private if requested)."""
-        types = "public_channel"
-        if include_private:
-            types += ",private_channel"
-
+        types = "public_channel" + (",private_channel" if include_private else "")
+        base = {"types": types, "exclude_archived": True}
         names: list[str] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, Any] = {"types": types, "limit": 200, "exclude_archived": True}
-            if cursor:
-                params["cursor"] = cursor
-            resp = self._client.conversations_list(**params)
-            for ch in resp.get("channels") or []:
-                name = ch.get("name")
-                if name:
-                    names.append(name)
-            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
-            if not cursor:
-                break
-            self._maybe_pause()
+        for ch in self._paginated_list(
+            self._client.conversations_list, "channels", base_params=base,
+        ):
+            name = ch.get("name")
+            if name:
+                names.append(name)
         return sorted(names)
 
     def _resolve_channel_id(self, name: str, *, include_private: bool = False) -> str | None:
         """Map a channel name to a channel ID (Slack API needs IDs, not names)."""
-        types = "public_channel"
-        if include_private:
-            types += ",private_channel"
-        cursor: str | None = None
-        while True:
-            params: dict[str, Any] = {"types": types, "limit": 200, "exclude_archived": True}
-            if cursor:
-                params["cursor"] = cursor
-            resp = self._client.conversations_list(**params)
-            for ch in resp.get("channels") or []:
-                if ch.get("name") == name:
-                    return ch.get("id")
-            cursor = (resp.get("response_metadata") or {}).get("next_cursor") or None
-            if not cursor:
-                break
-            self._maybe_pause()
+        types = "public_channel" + (",private_channel" if include_private else "")
+        base = {"types": types, "exclude_archived": True}
+        for ch in self._paginated_list(
+            self._client.conversations_list, "channels", base_params=base,
+        ):
+            if ch.get("name") == name:
+                return ch.get("id")
         return None
 
     # ----- message fetching -----
