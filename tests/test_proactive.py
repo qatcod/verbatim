@@ -44,12 +44,12 @@ def test_stale_entities_flags_old_untouched(tmp_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="old thing",
+                    actor="Alice", deliverable="old thing",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r",
+                        verbatim_quote="q", speaker="Alice", rationale="r",
                     )],
                 )],
             ),
@@ -71,12 +71,12 @@ def test_stale_entities_excludes_recent(tmp_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="fresh thing",
+                    actor="Alice", deliverable="fresh thing",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r",
+                        verbatim_quote="q", speaker="Alice", rationale="r",
                     )],
                 )],
             ),
@@ -97,12 +97,12 @@ def test_stale_entities_excludes_recently_touched(tmp_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="touched thing",
+                    actor="Alice", deliverable="touched thing",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r",
+                        verbatim_quote="q", speaker="Alice", rationale="r",
                     )],
                 )],
             ),
@@ -129,17 +129,17 @@ def test_stale_entities_kind_filter(tmp_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="c", confidence=Confidence.HIGH,
+                    actor="Alice", deliverable="c", confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
                 blockers=[Blocker(
-                    blocked_thing="b", blocked_by="x", owner="Qat",
+                    blocked_thing="b", blocked_by="x", owner="Alice",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",
@@ -163,30 +163,30 @@ def _seed_full(db_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat", "Jason"],
+                meeting_summary="seed", participants=["Alice", "Bob"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="ship the launch",
+                    actor="Alice", deliverable="ship the launch",
                     deadline="2026-05-25", confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
                 decisions=[Decision(
-                    topic="db", outcome="Postgres", participants=["Qat"],
+                    topic="db", outcome="Postgres", participants=["Alice"],
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
                 open_questions=[OpenQuestion(
-                    topic="ops", question="who runs ops?", raised_by="Qat",
+                    topic="ops", question="who runs ops?", raised_by="Alice",
                     confidence=Confidence.MEDIUM,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
                 blockers=[Blocker(
                     blocked_thing="release", blocked_by="security review",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",
@@ -200,10 +200,10 @@ def test_standup_collects_all_buckets(tmp_path: Path) -> None:
     _seed_full(db)
     conn = state.open_db(db)
     try:
-        report = state.standup(conn, "Qat", now=NOW)
+        report = state.standup(conn, "Alice", now=NOW)
     finally:
         conn.close()
-    assert report["person"] == "Qat"
+    assert report["person"] == "Alice"
     assert len(report["owed"]) == 1
     assert report["owed"][0]["payload"]["deliverable"] == "ship the launch"
     assert len(report["blocked"]) == 1
@@ -215,7 +215,7 @@ def test_standup_owed_is_deadline_annotated(tmp_path: Path) -> None:
     _seed_full(db)
     conn = state.open_db(db)
     try:
-        report = state.standup(conn, "Qat", now=NOW)
+        report = state.standup(conn, "Alice", now=NOW)
     finally:
         conn.close()
     owed = report["owed"][0]
@@ -236,7 +236,7 @@ def test_standup_recently_resolved_from_audit(tmp_path: Path) -> None:
             "VALUES (?, ?, 'confirm', ?)",
             (store.new_id(), eid, (NOW - timedelta(days=1)).isoformat()),
         )
-        report = state.standup(conn, "Qat", now=NOW)
+        report = state.standup(conn, "Alice", now=NOW)
     finally:
         conn.close()
     assert len(report["recently_resolved"]) == 1
@@ -257,7 +257,7 @@ def test_standup_ignores_old_audit_activity(tmp_path: Path) -> None:
             "VALUES (?, ?, 'confirm', ?)",
             (store.new_id(), eid, (NOW - timedelta(days=30)).isoformat()),
         )
-        report = state.standup(conn, "Qat", now=NOW)
+        report = state.standup(conn, "Alice", now=NOW)
     finally:
         conn.close()
     assert report["recently_resolved"] == []

@@ -23,13 +23,13 @@ from verbatim.schema import (
 
 def _seed(conn: sqlite3.Connection, *, deliverable: str = "ship v0") -> str:
     result = ExtractionResult(
-        meeting_summary="seed", participants=["Qat"],
+        meeting_summary="seed", participants=["Alice"],
         commitments=[Commitment(
-            actor="Qat", deliverable=deliverable, deadline="2026-05-23",
+            actor="Alice", deliverable=deliverable, deadline="2026-05-23",
             confidence=Confidence.HIGH,
             sources=[SourceReference(
                 verbatim_quote="I'll ship Friday.",
-                speaker="Qat", rationale="explicit",
+                speaker="Alice", rationale="explicit",
             )],
         )],
     )
@@ -39,7 +39,7 @@ def _seed(conn: sqlite3.Connection, *, deliverable: str = "ship v0") -> str:
     )
     state.save_extraction(conn, result, diag, source_path="m.txt")
     row = conn.execute(
-        "SELECT id FROM entities WHERE primary_actor = 'Qat' ORDER BY created_at DESC LIMIT 1"
+        "SELECT id FROM entities WHERE primary_actor = 'Alice' ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
     return row["id"]
 
@@ -84,13 +84,13 @@ def test_github_create_issue_returns_issue() -> None:
         return gh_response({
             "id": 1234567, "number": 42,
             "html_url": "https://github.com/qatcod/verbatim/issues/42",
-            "title": "[verbatim] Qat: ship v0",
+            "title": "[verbatim] Alice: ship v0",
         })
 
     client = make_gh_client(handler)
     issue = client.create_issue(
         repo="qatcod/verbatim",
-        title="[verbatim] Qat: ship v0",
+        title="[verbatim] Alice: ship v0",
         body="body",
         assignees=["qatcod"],
         labels=["verbatim", "auto"],
@@ -109,7 +109,7 @@ def test_github_render_includes_quote_and_id(tmp_path: Path) -> None:
         eid = _seed(conn)
         entity = store.fetch_entity(conn, eid)
         draft = github_issues.render_issue_from_commitment(entity)
-        assert "Qat: ship v0" in draft.title
+        assert "Alice: ship v0" in draft.title
         assert "[verbatim]" in draft.title
         assert "I'll ship Friday." in draft.body
         assert eid in draft.body
@@ -238,7 +238,7 @@ def test_jira_create_issue_returns_payload_with_browse_url() -> None:
     client = make_jira_client(handler)
     issue = client.create_issue(
         project_key="ENG",
-        summary="Qat: ship v0",
+        summary="Alice: ship v0",
         description_adf=jira.adf_doc([jira.adf_paragraph("hi")]),
         issuetype="Task",
         labels=["verbatim"],
@@ -248,7 +248,7 @@ def test_jira_create_issue_returns_payload_with_browse_url() -> None:
     assert issue["_browse_url"] == "https://test.atlassian.net/browse/ENG-42"
     body = captured[0]["body"]
     assert body["fields"]["project"]["key"] == "ENG"
-    assert body["fields"]["summary"] == "Qat: ship v0"
+    assert body["fields"]["summary"] == "Alice: ship v0"
     assert body["fields"]["issuetype"]["name"] == "Task"
     assert "verbatim" in body["fields"]["labels"]
 

@@ -135,13 +135,13 @@ def test_entity_to_text_commitment() -> None:
     entity = {
         "kind": "commitment",
         "payload": {
-            "actor": "Qat", "deliverable": "ship the prototype",
+            "actor": "Alice", "deliverable": "ship the prototype",
             "deadline": "Friday",
         },
         "sources": [{"verbatim_quote": "I'll ship it Friday."}],
     }
     text = simplify.entity_to_text(entity)
-    assert "Qat" in text
+    assert "Alice" in text
     assert "ship the prototype" in text
     assert "Friday" in text
     assert "I'll ship it Friday." in text
@@ -152,7 +152,7 @@ def test_entity_to_text_blocker() -> None:
         "kind": "blocker",
         "payload": {
             "blocked_thing": "launch", "blocked_by": "security review",
-            "owner": "Qat",
+            "owner": "Alice",
         },
         "sources": [],
     }
@@ -182,14 +182,14 @@ def test_simplify_entity_flattens_and_simplifies(tmp_path: Path, monkeypatch) ->
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 blockers=[Blocker(
                     blocked_thing="public launch",
                     blocked_by="the Cyren tier-3 JWT audience binding",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
                         verbatim_quote="JWT audience is wrong.",
-                        speaker="Qat", rationale="r")],
+                        speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",
@@ -232,11 +232,11 @@ def test_ask_plain_language_adds_rule(tmp_path: Path, monkeypatch) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="ship", confidence=Confidence.HIGH,
+                    actor="Alice", deliverable="ship", confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",
@@ -281,11 +281,11 @@ def test_entity_detail_simplify_panel(tmp_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="ship", confidence=Confidence.HIGH,
+                    actor="Alice", deliverable="ship", confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="q", speaker="Qat", rationale="r")],
+                        verbatim_quote="q", speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",

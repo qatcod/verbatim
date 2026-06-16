@@ -24,26 +24,26 @@ from verbatim.schema import (
 def seeded_conn(conn: sqlite3.Connection) -> sqlite3.Connection:
     result = ExtractionResult(
         meeting_summary="digest seed",
-        participants=["Qat"],
+        participants=["Alice"],
         commitments=[Commitment(
-            actor="Qat", deliverable="ship v0", deadline="Friday",
+            actor="Alice", deliverable="ship v0", deadline="Friday",
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="x", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="x", speaker="Alice", rationale="r")],
         )],
         decisions=[Decision(
-            topic="lang", outcome="Python", participants=["Qat"],
+            topic="lang", outcome="Python", participants=["Alice"],
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="y", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="y", speaker="Alice", rationale="r")],
         )],
         open_questions=[OpenQuestion(
             topic="cost", question="What's the budget?",
-            raised_by="Taz", confidence=Confidence.MEDIUM,
-            sources=[SourceReference(verbatim_quote="z", speaker="Taz", rationale="r")],
+            raised_by="Carol", confidence=Confidence.MEDIUM,
+            sources=[SourceReference(verbatim_quote="z", speaker="Carol", rationale="r")],
         )],
         blockers=[Blocker(
             blocked_thing="ship public", blocked_by="review",
-            owner="Taz", confidence=Confidence.LOW,
-            sources=[SourceReference(verbatim_quote="w", speaker="Jason", rationale="r")],
+            owner="Carol", confidence=Confidence.LOW,
+            sources=[SourceReference(verbatim_quote="w", speaker="Bob", rationale="r")],
         )],
     )
     diag = ExtractionDiagnostics(
@@ -78,7 +78,7 @@ def test_render_digest_text_contains_each_section(seeded_conn: sqlite3.Connectio
     assert "Recent commitments" in text
     assert "Open blockers" in text
     assert "Open questions" in text
-    assert "Qat" in text
+    assert "Alice" in text
     assert "ship v0" in text
 
 

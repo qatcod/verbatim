@@ -91,28 +91,28 @@ def seeded_conn(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Insert one commitment, one decision, one question, one blocker."""
     result = ExtractionResult(
         meeting_summary="bot test seed",
-        participants=["Qat", "Jason"],
+        participants=["Alice", "Bob"],
         commitments=[Commitment(
-            actor="Qat", deliverable="ship v0", deadline="EOD Wednesday",
+            actor="Alice", deliverable="ship v0", deadline="EOD Wednesday",
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="I'll ship Wed.", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="I'll ship Wed.", speaker="Alice", rationale="r")],
         )],
         decisions=[Decision(
             topic="language", outcome="Python",
-            participants=["Qat"], confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="Python it is.", speaker="Qat", rationale="r")],
+            participants=["Alice"], confidence=Confidence.HIGH,
+            sources=[SourceReference(verbatim_quote="Python it is.", speaker="Alice", rationale="r")],
         )],
         open_questions=[OpenQuestion(
             topic="cost", question="What's the API budget?",
-            raised_by="Taz", addressed_to="Jason",
+            raised_by="Carol", addressed_to="Bob",
             confidence=Confidence.MEDIUM,
-            sources=[SourceReference(verbatim_quote="budget?", speaker="Taz", rationale="r")],
+            sources=[SourceReference(verbatim_quote="budget?", speaker="Carol", rationale="r")],
         )],
         blockers=[Blocker(
             blocked_thing="ship public",
             blocked_by="extraction quality review",
-            owner="Taz", confidence=Confidence.MEDIUM,
-            sources=[SourceReference(verbatim_quote="don't ship half-baked", speaker="Jason", rationale="r")],
+            owner="Carol", confidence=Confidence.MEDIUM,
+            sources=[SourceReference(verbatim_quote="don't ship half-baked", speaker="Bob", rationale="r")],
         )],
     )
     diag = ExtractionDiagnostics(
@@ -144,9 +144,9 @@ def test_parse_simple_subcommand() -> None:
 
 
 def test_parse_subcommand_with_args() -> None:
-    p = slack_bot.parse_command_text("commitments qat")
+    p = slack_bot.parse_command_text("commitments alice")
     assert p.subcommand == "commitments"
-    assert p.args == ["qat"]
+    assert p.args == ["alice"]
 
 
 def test_parse_is_case_insensitive_for_subcommand() -> None:
@@ -177,11 +177,11 @@ def test_format_commitments_includes_actor_and_deadline() -> None:
         "id": "abc1234567",
         "kind": "commitment",
         "confidence": "high",
-        "payload": {"actor": "Qat", "deliverable": "ship v0", "deadline": "Friday"},
+        "payload": {"actor": "Alice", "deliverable": "ship v0", "deadline": "Friday"},
         "sources": [],
     }]
     text = slack_bot.format_commitments(items)
-    assert "*Qat*" in text
+    assert "*Alice*" in text
     assert "ship v0" in text
     assert "Friday" in text
     assert "abc12345" in text  # id prefix shown
@@ -237,13 +237,13 @@ def test_dispatch_commitments(seeded_conn) -> None:
     out = slack_bot.dispatch_command(
         slack_bot.ParsedCommand(subcommand="commitments", args=[]), seeded_conn,
     )
-    assert "Qat" in out
+    assert "Alice" in out
     assert "ship v0" in out
 
 
 def test_dispatch_commitments_filtered_by_actor(seeded_conn) -> None:
     out = slack_bot.dispatch_command(
-        slack_bot.ParsedCommand(subcommand="commitments", args=["jason"]), seeded_conn,
+        slack_bot.ParsedCommand(subcommand="commitments", args=["bob"]), seeded_conn,
     )
     assert "No open commitments" in out
 
@@ -364,7 +364,7 @@ def test_handle_slash_command_uses_response_url_by_default(tmp_db_path, seeded_c
     post = fake_http.posts[0]
     assert post["url"] == "https://hooks.slack.com/commands/T01/x/y"
     assert post["json"]["response_type"] == "ephemeral"
-    assert "Qat" in post["json"]["text"]
+    assert "Alice" in post["json"]["text"]
     # Web API not touched
     assert fake_web.ephemerals == []
     assert fake_web.posts == []
@@ -437,7 +437,7 @@ def test_post_digest_includes_stats_and_recent_items(tmp_db_path, seeded_conn) -
     text = fake_web.posts[0]["text"]
     assert "Verbatim digest" in text
     assert "open commitments" in text
-    assert "Qat" in text  # recent commitments section
+    assert "Alice" in text  # recent commitments section
 
 
 def test_post_digest_empty_state(tmp_db_path) -> None:

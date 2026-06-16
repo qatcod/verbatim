@@ -48,7 +48,7 @@ def gql_error(errors: list[dict[str, Any]]) -> httpx.Response:
 def _seed_commitment(
     conn: sqlite3.Connection,
     *,
-    actor: str = "Qat",
+    actor: str = "Alice",
     deliverable: str = "ship v0",
     deadline: str | None = "2026-05-23",
     confidence: Confidence = Confidence.HIGH,
@@ -93,12 +93,12 @@ def test_viewer_query() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert "viewer" in body["query"]
-        return gql_response({"viewer": {"id": "u1", "name": "Qat", "email": "q@x.com", "displayName": "qat"}})
+        return gql_response({"viewer": {"id": "u1", "name": "Alice", "email": "q@x.com", "displayName": "alice"}})
 
     client = make_linear_client(handler)
     me = client.viewer()
     client.close()
-    assert me["displayName"] == "qat"
+    assert me["displayName"] == "alice"
 
 
 def test_list_teams() -> None:
@@ -191,20 +191,20 @@ def test_create_issue_non_success_raises() -> None:
 
 def test_user_resolver_matches_display_name() -> None:
     users = [
-        {"id": "u1", "displayName": "qat", "name": "Qat Hassan", "email": "qat@x.com"},
-        {"id": "u2", "displayName": "jason", "name": "Jason R", "email": "jason@x.com"},
+        {"id": "u1", "displayName": "alice", "name": "Alice Hassan", "email": "alice@x.com"},
+        {"id": "u2", "displayName": "bob", "name": "Bob R", "email": "bob@x.com"},
     ]
     resolve = linear_proj.build_user_resolver(users)
-    assert resolve("qat") == "u1"
-    assert resolve("Qat") == "u1"
-    assert resolve("@qat") == "u1"
-    assert resolve("jason") == "u2"
+    assert resolve("alice") == "u1"
+    assert resolve("Alice") == "u1"
+    assert resolve("@alice") == "u1"
+    assert resolve("bob") == "u2"
 
 
 def test_user_resolver_falls_through_to_name_then_email() -> None:
-    users = [{"id": "u1", "name": "Qat Hassan", "email": "qat-h@x.com"}]
+    users = [{"id": "u1", "name": "Alice Hassan", "email": "qat-h@x.com"}]
     resolve = linear_proj.build_user_resolver(users)
-    assert resolve("Qat Hassan") == "u1"
+    assert resolve("Alice Hassan") == "u1"
     assert resolve("qat-h") == "u1"
     assert resolve("unknown") is None
 
@@ -222,7 +222,7 @@ def test_render_issue_from_commitment_includes_quote_and_id(conn: sqlite3.Connec
     eid = _seed_commitment(conn)
     entity = store.fetch_entity(conn, eid)
     draft = linear_proj.render_issue_from_commitment(entity)
-    assert "Qat: ship v0" in draft.title
+    assert "Alice: ship v0" in draft.title
     assert "I'll ship by friday." in draft.description
     assert eid in draft.description  # entity id round-tripped
     assert draft.due_date == "2026-05-23"  # ISO date passes through
@@ -251,7 +251,7 @@ def test_plan_projection_returns_draft_for_pending(conn: sqlite3.Connection) -> 
     entity = store.fetch_entity(conn, eid)
     plan = linear_proj.plan_projection(conn, entity)
     assert plan.skip_reason is None
-    assert plan.draft.title.startswith("Qat:")
+    assert plan.draft.title.startswith("Alice:")
 
 
 def test_plan_projection_skips_non_canonical(conn: sqlite3.Connection) -> None:

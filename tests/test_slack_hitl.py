@@ -58,13 +58,13 @@ def _seed_commitment(db_path: Path, *, deliverable: str = "ship v0") -> str:
     conn = state.open_db(db_path)
     try:
         result = ExtractionResult(
-            meeting_summary="seed", participants=["Qat"],
+            meeting_summary="seed", participants=["Alice"],
             commitments=[Commitment(
-                actor="Qat", deliverable=deliverable, deadline="Friday",
+                actor="Alice", deliverable=deliverable, deadline="Friday",
                 confidence=Confidence.HIGH,
                 sources=[SourceReference(
                     verbatim_quote="I'll ship Friday.",
-                    speaker="Qat", rationale="explicit",
+                    speaker="Alice", rationale="explicit",
                 )],
             )],
         )
@@ -74,7 +74,7 @@ def _seed_commitment(db_path: Path, *, deliverable: str = "ship v0") -> str:
         )
         state.save_extraction(conn, result, diag, source_path="m.txt")
         row = conn.execute(
-            "SELECT id FROM entities WHERE primary_actor='Qat' ORDER BY created_at DESC LIMIT 1"
+            "SELECT id FROM entities WHERE primary_actor='Alice' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         return row["id"]
     finally:
@@ -153,7 +153,7 @@ def test_card_escapes_html_in_user_content(tmp_db_path: Path) -> None:
     conn = state.open_db(tmp_db_path)
     try:
         result = ExtractionResult(
-            meeting_summary="seed", participants=["Qat"],
+            meeting_summary="seed", participants=["Alice"],
             commitments=[Commitment(
                 actor="<script>", deliverable="</section><b>bold</b>",
                 confidence=Confidence.HIGH,

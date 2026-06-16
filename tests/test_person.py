@@ -36,47 +36,47 @@ def seeded_db(tmp_path: Path) -> Path:
             conn,
             ExtractionResult(
                 meeting_summary="seed",
-                participants=["Qat", "Jason", "Taz"],
+                participants=["Alice", "Bob", "Carol"],
                 commitments=[
                     Commitment(
-                        actor="Qat", deliverable="ship v0", deadline="Friday",
+                        actor="Alice", deliverable="ship v0", deadline="Friday",
                         confidence=Confidence.HIGH,
                         sources=[SourceReference(
                             verbatim_quote="I'll ship v0 Friday.",
-                            speaker="Qat", rationale="r",
+                            speaker="Alice", rationale="r",
                         )],
                     ),
                     Commitment(
-                        actor="Jason", deliverable="review v0",
+                        actor="Bob", deliverable="review v0",
                         confidence=Confidence.MEDIUM,
                         sources=[SourceReference(
                             verbatim_quote="I'll review.",
-                            speaker="Jason", rationale="r",
+                            speaker="Bob", rationale="r",
                         )],
                     ),
                 ],
                 decisions=[Decision(
                     topic="db", outcome="Postgres",
-                    participants=["Qat", "Jason"],
+                    participants=["Alice", "Bob"],
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="Postgres.", speaker="Jason", rationale="r",
+                        verbatim_quote="Postgres.", speaker="Bob", rationale="r",
                     )],
                 )],
                 open_questions=[OpenQuestion(
                     topic="staffing", question="Who runs ops?",
-                    raised_by="Taz", confidence=Confidence.MEDIUM,
+                    raised_by="Carol", confidence=Confidence.MEDIUM,
                     sources=[SourceReference(
                         verbatim_quote="Who runs ops?",
-                        speaker="Taz", rationale="r",
+                        speaker="Carol", rationale="r",
                     )],
                 )],
                 blockers=[Blocker(
                     blocked_thing="launch", blocked_by="security review",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
                         verbatim_quote="security first.",
-                        speaker="Jason", rationale="r",
+                        speaker="Bob", rationale="r",
                     )],
                 )],
             ),
@@ -98,10 +98,10 @@ def client(seeded_db: Path) -> TestClient:
 def test_fetch_person_aggregates_all_four_kinds(seeded_db: Path) -> None:
     conn = state.open_db(seeded_db)
     try:
-        view = store.fetch_person(conn, "Qat")
+        view = store.fetch_person(conn, "Alice")
     finally:
         conn.close()
-    assert view["name"] == "Qat"
+    assert view["name"] == "Alice"
     assert view["stats"]["commitments"] == 1
     assert view["stats"]["decisions"] == 1
     assert view["stats"]["blockers_owned"] == 1
@@ -112,8 +112,8 @@ def test_fetch_person_aggregates_all_four_kinds(seeded_db: Path) -> None:
 def test_fetch_person_case_insensitive(seeded_db: Path) -> None:
     conn = state.open_db(seeded_db)
     try:
-        upper = store.fetch_person(conn, "QAT")
-        lower = store.fetch_person(conn, "qat")
+        upper = store.fetch_person(conn, "ALICE")
+        lower = store.fetch_person(conn, "alice")
     finally:
         conn.close()
     assert upper["stats"]["total"] == lower["stats"]["total"] == 3
@@ -123,7 +123,7 @@ def test_fetch_person_substring_match(seeded_db: Path) -> None:
     """A name fragment should match the full name."""
     conn = state.open_db(seeded_db)
     try:
-        view = store.fetch_person(conn, "Jas")  # matches "Jason"
+        view = store.fetch_person(conn, "Bo")  # matches "Bob"
     finally:
         conn.close()
     assert view["stats"]["commitments"] == 1
@@ -146,13 +146,13 @@ def test_fetch_person_unknown_returns_zero(seeded_db: Path) -> None:
 def test_fetch_person_excludes_resolved_by_default(seeded_db: Path) -> None:
     conn = state.open_db(seeded_db)
     try:
-        # Resolve Qat's commitment
+        # Resolve Alice's commitment
         row = conn.execute(
-            "SELECT id FROM entities WHERE kind='commitment' AND primary_actor='Qat'"
+            "SELECT id FROM entities WHERE kind='commitment' AND primary_actor='Alice'"
         ).fetchone()
         store.update_entity_status(conn, row["id"], "resolved")
-        without_resolved = store.fetch_person(conn, "Qat")
-        with_resolved = store.fetch_person(conn, "Qat", include_resolved=True)
+        without_resolved = store.fetch_person(conn, "Alice")
+        with_resolved = store.fetch_person(conn, "Alice", include_resolved=True)
     finally:
         conn.close()
     assert without_resolved["stats"]["commitments"] == 0
@@ -163,12 +163,12 @@ def test_fetch_person_decisions_use_participants(seeded_db: Path) -> None:
     """Decisions don't have primary_actor — must come from JSON1 participants."""
     conn = state.open_db(seeded_db)
     try:
-        view = store.fetch_person(conn, "Jason")
+        view = store.fetch_person(conn, "Bob")
     finally:
         conn.close()
     assert view["stats"]["decisions"] == 1
     decision = view["decisions"][0]
-    assert "Jason" in decision["payload"]["participants"]
+    assert "Bob" in decision["payload"]["participants"]
 
 
 # ----- store.list_known_people -----
@@ -181,9 +181,9 @@ def test_list_known_people_returns_distinct_names(seeded_db: Path) -> None:
     finally:
         conn.close()
     names = {p["name"] for p in people}
-    assert "Qat" in names
-    assert "Jason" in names
-    assert "Taz" in names
+    assert "Alice" in names
+    assert "Bob" in names
+    assert "Carol" in names
 
 
 def test_list_known_people_sorted_by_frequency(seeded_db: Path) -> None:
@@ -192,9 +192,9 @@ def test_list_known_people_sorted_by_frequency(seeded_db: Path) -> None:
         people = store.list_known_people(conn)
     finally:
         conn.close()
-    # Qat appears as commitment.actor + blocker.owner = 2 entities;
+    # Alice appears as commitment.actor + blocker.owner = 2 entities;
     # others appear once.
-    assert people[0]["name"] == "Qat"
+    assert people[0]["name"] == "Alice"
     assert people[0]["total"] == 2
 
 
@@ -207,7 +207,7 @@ def test_list_known_people_folds_case_variants(tmp_path: Path) -> None:
         stop_reason="end_turn", transcript_chars=10,
     )
     try:
-        for actor in ("Qat", "QAT", "qat"):
+        for actor in ("Alice", "ALICE", "alice"):
             state.save_extraction(
                 conn,
                 ExtractionResult(
@@ -226,7 +226,7 @@ def test_list_known_people_folds_case_variants(tmp_path: Path) -> None:
         people = store.list_known_people(conn)
     finally:
         conn.close()
-    qat_entries = [p for p in people if p["name"].lower() == "qat"]
+    qat_entries = [p for p in people if p["name"].lower() == "alice"]
     assert len(qat_entries) == 1
     assert qat_entries[0]["total"] == 3
 
@@ -238,14 +238,14 @@ def test_people_route_renders(client: TestClient) -> None:
     r = client.get("/people")
     assert r.status_code == 200
     body = r.text
-    assert "Qat" in body
-    assert "Jason" in body
-    assert "Taz" in body
+    assert "Alice" in body
+    assert "Bob" in body
+    assert "Carol" in body
 
 
 def test_people_route_links_to_person_detail(client: TestClient) -> None:
     r = client.get("/people")
-    assert 'href="/person/Qat"' in r.text
+    assert 'href="/person/Alice"' in r.text
 
 
 def test_people_route_empty_state(tmp_path: Path) -> None:
@@ -262,14 +262,14 @@ def test_people_route_empty_state(tmp_path: Path) -> None:
 
 
 def test_person_detail_renders(client: TestClient) -> None:
-    r = client.get("/person/Qat")
+    r = client.get("/person/Alice")
     assert r.status_code == 200
     body = r.text
-    assert "Qat" in body
+    assert "Alice" in body
     assert "Commitments owed" in body
     assert "Blockers owned" in body
     assert "Decisions involved" in body
-    # No questions raised by Qat in the seed data
+    # No questions raised by Alice in the seed data
     assert "Questions raised" not in body
 
 

@@ -35,34 +35,34 @@ def _seed(db_path: Path) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat", "Jason"],
+                meeting_summary="seed", participants=["Alice", "Bob"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="ship the CULA prototype",
+                    actor="Alice", deliverable="ship the CULA prototype",
                     deadline="Friday", confidence=Confidence.HIGH,
                     sources=[SourceReference(
                         verbatim_quote="I'll ship CULA by Friday.",
-                        speaker="Qat", rationale="r")],
+                        speaker="Alice", rationale="r")],
                 )],
                 decisions=[Decision(
                     topic="database choice", outcome="use Postgres",
-                    participants=["Qat", "Jason"], confidence=Confidence.HIGH,
+                    participants=["Alice", "Bob"], confidence=Confidence.HIGH,
                     sources=[SourceReference(
                         verbatim_quote="Postgres it is.",
-                        speaker="Jason", rationale="r")],
+                        speaker="Bob", rationale="r")],
                 )],
                 open_questions=[OpenQuestion(
                     topic="ops", question="who owns the m2w config?",
-                    raised_by="Jason", confidence=Confidence.MEDIUM,
+                    raised_by="Bob", confidence=Confidence.MEDIUM,
                     sources=[SourceReference(
                         verbatim_quote="who owns m2w?",
-                        speaker="Jason", rationale="r")],
+                        speaker="Bob", rationale="r")],
                 )],
                 blockers=[Blocker(
                     blocked_thing="launch", blocked_by="security review",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
                         verbatim_quote="security first.",
-                        speaker="Qat", rationale="r")],
+                        speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",
@@ -138,7 +138,7 @@ def test_answer_ollama_path(tmp_path: Path, monkeypatch) -> None:
         captured["body"] = request.read().decode()
         return httpx.Response(200, json={
             "choices": [{
-                "message": {"content": "Qat is shipping CULA by Friday (VRB-...)."},
+                "message": {"content": "Alice is shipping CULA by Friday (VRB-...)."},
                 "finish_reason": "stop",
             }],
             "usage": {"prompt_tokens": 120, "completion_tokens": 18},
@@ -156,7 +156,7 @@ def test_answer_ollama_path(tmp_path: Path, monkeypatch) -> None:
 
     conn = state.open_db(db)
     try:
-        result = ask.answer(conn, "what is Qat doing?", model="ollama:llama3.1:8b")
+        result = ask.answer(conn, "what is Alice doing?", model="ollama:llama3.1:8b")
     finally:
         conn.close()
     assert "CULA" in result.answer
@@ -165,7 +165,7 @@ def test_answer_ollama_path(tmp_path: Path, monkeypatch) -> None:
     assert result.output_tokens == 18
     assert result.entities_considered == 4
     # The question + state both reached the model.
-    assert "what is Qat doing?" in captured["body"]
+    assert "what is Alice doing?" in captured["body"]
     assert "Postgres" in captured["body"]
 
 

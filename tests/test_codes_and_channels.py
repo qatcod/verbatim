@@ -41,16 +41,16 @@ def _seed_two_channels(db_path: Path) -> sqlite3.Connection:
         conn,
         ExtractionResult(
             meeting_summary="seed-engineering",
-            participants=["Qat"],
+            participants=["Alice"],
             commitments=[
-                _commitment("Qat", "ship v0"),
-                _commitment("Jason", "approve the launch"),
+                _commitment("Alice", "ship v0"),
+                _commitment("Bob", "approve the launch"),
             ],
             blockers=[Blocker(
                 blocked_thing="release", blocked_by="security",
-                owner="Qat", confidence=Confidence.HIGH,
+                owner="Alice", confidence=Confidence.HIGH,
                 sources=[SourceReference(
-                    verbatim_quote="security first.", speaker="Qat", rationale="r")],
+                    verbatim_quote="security first.", speaker="Alice", rationale="r")],
             )],
         ),
         _diag(),
@@ -60,16 +60,16 @@ def _seed_two_channels(db_path: Path) -> sqlite3.Connection:
         conn,
         ExtractionResult(
             meeting_summary="seed-product",
-            participants=["Jason"],
+            participants=["Bob"],
             commitments=[
-                _commitment("Jason", "draft the launch post"),
-                _commitment("Taz", "review designs"),
+                _commitment("Bob", "draft the launch post"),
+                _commitment("Carol", "review designs"),
             ],
             blockers=[Blocker(
                 blocked_thing="launch", blocked_by="content review",
-                owner="Jason", confidence=Confidence.MEDIUM,
+                owner="Bob", confidence=Confidence.MEDIUM,
                 sources=[SourceReference(
-                    verbatim_quote="needs review.", speaker="Jason", rationale="r")],
+                    verbatim_quote="needs review.", speaker="Bob", rationale="r")],
             )],
         ),
         _diag(),
@@ -158,7 +158,7 @@ def test_state_list_commitments_channel_scope(tmp_path: Path) -> None:
         prod = state.list_commitments(conn, channel="product")
     finally:
         conn.close()
-    assert {c["payload"]["actor"] for c in eng} == {"Qat", "Jason"}
+    assert {c["payload"]["actor"] for c in eng} == {"Alice", "Bob"}
     assert "ship v0" in {c["payload"]["deliverable"] for c in eng}
     assert {c["payload"]["deliverable"] for c in prod} == {
         "draft the launch post", "review designs",

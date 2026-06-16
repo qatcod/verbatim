@@ -1,25 +1,25 @@
 [
   {
     "id": "U001",
-    "name": "qat",
+    "name": "alice",
     "profile": {
-      "display_name_normalized": "qat",
-      "real_name_normalized": "Qat Hassan"
+      "display_name_normalized": "alice",
+      "real_name_normalized": "Alice Anders"
     }
   },
   {
     "id": "U002",
-    "name": "jason",
+    "name": "bob",
     "profile": {
-      "display_name_normalized": "jason",
-      "real_name_normalized": "Jason Remillard"
+      "display_name_normalized": "bob",
+      "real_name_normalized": "Bob Brown"
     }
   },
   {
     "id": "U003",
-    "name": "taz",
+    "name": "carol",
     "profile": {
-      "real_name_normalized": "Taz Jack"
+      "real_name_normalized": "Carol Carter"
     }
   }
 ]

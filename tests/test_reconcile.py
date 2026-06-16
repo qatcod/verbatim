@@ -77,8 +77,8 @@ def _seed_commitment(
 
 
 def test_find_candidates_same_actor_similar_topic(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by friday EOD")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by friday EOD")
     e2 = store.fetch_entity(conn, id2)
     matches = reconcile.find_candidates(conn, e2)
     assert len(matches) == 1
@@ -86,24 +86,24 @@ def test_find_candidates_same_actor_similar_topic(conn: sqlite3.Connection) -> N
 
 
 def test_find_candidates_skips_different_actor(conn: sqlite3.Connection) -> None:
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Jason", deliverable="ship v0 by Friday")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Bob", deliverable="ship v0 by Friday")
     e2 = store.fetch_entity(conn, id2)
     matches = reconcile.find_candidates(conn, e2)
     assert matches == []
 
 
 def test_find_candidates_skips_low_similarity(conn: sqlite3.Connection) -> None:
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="write the customer-facing blog post")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="write the customer-facing blog post")
     e2 = store.fetch_entity(conn, id2)
     matches = reconcile.find_candidates(conn, e2, threshold=88)
     assert matches == []
 
 
 def test_find_candidates_threshold_is_respected(conn: sqlite3.Connection) -> None:
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 next week")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 next week")
     e2 = store.fetch_entity(conn, id2)
     # at 100 threshold no match; at low threshold yes
     assert reconcile.find_candidates(conn, e2, threshold=100) == []
@@ -115,8 +115,8 @@ def test_find_candidates_threshold_is_respected(conn: sqlite3.Connection) -> Non
 
 
 def test_link_entities_sets_canonical(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday EOD")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday EOD")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     e2 = store.fetch_entity(conn, id2)
     assert e2["canonical_id"] == id1
@@ -124,16 +124,16 @@ def test_link_entities_sets_canonical(conn: sqlite3.Connection) -> None:
 
 
 def test_link_entities_rejects_self_link(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="x")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="x")
     with pytest.raises(ValueError):
         reconcile.link_entities(conn, canonical_id=id1, member_id=id1)
 
 
 def test_link_entities_resolves_chain_to_root(conn: sqlite3.Connection) -> None:
     """Linking C into B where B is already linked into A must put C under A."""
-    id_a = _seed_commitment(conn, actor="Qat", deliverable="a")
-    id_b = _seed_commitment(conn, actor="Qat", deliverable="b")
-    id_c = _seed_commitment(conn, actor="Qat", deliverable="c")
+    id_a = _seed_commitment(conn, actor="Alice", deliverable="a")
+    id_b = _seed_commitment(conn, actor="Alice", deliverable="b")
+    id_c = _seed_commitment(conn, actor="Alice", deliverable="c")
     reconcile.link_entities(conn, canonical_id=id_a, member_id=id_b)
     reconcile.link_entities(conn, canonical_id=id_b, member_id=id_c)
     # C should point to A (the root), not B
@@ -143,9 +143,9 @@ def test_link_entities_resolves_chain_to_root(conn: sqlite3.Connection) -> None:
 
 def test_link_re_roots_existing_children(conn: sqlite3.Connection) -> None:
     """If A is a canonical with child A', linking A under B makes A' also link to B."""
-    id_a = _seed_commitment(conn, actor="Qat", deliverable="a")
-    id_a_prime = _seed_commitment(conn, actor="Qat", deliverable="a-prime")
-    id_b = _seed_commitment(conn, actor="Qat", deliverable="b")
+    id_a = _seed_commitment(conn, actor="Alice", deliverable="a")
+    id_a_prime = _seed_commitment(conn, actor="Alice", deliverable="a-prime")
+    id_b = _seed_commitment(conn, actor="Alice", deliverable="b")
     reconcile.link_entities(conn, canonical_id=id_a, member_id=id_a_prime)
     # Now link A under B
     reconcile.link_entities(conn, canonical_id=id_b, member_id=id_a)
@@ -156,8 +156,8 @@ def test_link_re_roots_existing_children(conn: sqlite3.Connection) -> None:
 
 
 def test_unlink_restores_canonical(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday EOD")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday EOD")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     assert reconcile.unlink_entity(conn, id2) is True
     e2 = store.fetch_entity(conn, id2)
@@ -166,7 +166,7 @@ def test_unlink_restores_canonical(conn: sqlite3.Connection) -> None:
 
 
 def test_unlink_already_canonical_is_noop(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="x")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="x")
     assert reconcile.unlink_entity(conn, id1) is False
 
 
@@ -174,17 +174,17 @@ def test_unlink_already_canonical_is_noop(conn: sqlite3.Connection) -> None:
 
 
 def test_reconcile_all_links_obvious_duplicates(conn: sqlite3.Connection) -> None:
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday EOD")
-    _seed_commitment(conn, actor="Qat", deliverable="completely unrelated thing")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday EOD")
+    _seed_commitment(conn, actor="Alice", deliverable="completely unrelated thing")
     result = reconcile.reconcile_all(conn)
     assert result.linked == 1
     assert result.no_match >= 1
 
 
 def test_reconcile_one_respects_already_merged(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday EOD")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday EOD")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     # Reconciling id2 again should be a no-op since it's already merged.
     outcome = reconcile.reconcile_one(conn, id2)
@@ -192,8 +192,8 @@ def test_reconcile_one_respects_already_merged(conn: sqlite3.Connection) -> None
 
 
 def test_reconcile_threshold_blocks_weak_matches(conn: sqlite3.Connection) -> None:
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 by Friday")
-    _seed_commitment(conn, actor="Qat", deliverable="ship v0 next week sometime")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 by Friday")
+    _seed_commitment(conn, actor="Alice", deliverable="ship v0 next week sometime")
     # at threshold=100, no merge
     result = reconcile.reconcile_all(conn, threshold=100)
     assert result.linked == 0
@@ -204,8 +204,8 @@ def test_reconcile_threshold_blocks_weak_matches(conn: sqlite3.Connection) -> No
 
 def test_canonical_view_folds_sources(conn: sqlite3.Connection) -> None:
     """After merging, the canonical entity surfaces sources from both originals."""
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0", quote="quote A")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by EOD", quote="quote B")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0", quote="quote A")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by EOD", quote="quote B")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     items = state.list_commitments(conn)
     assert len(items) == 1
@@ -217,8 +217,8 @@ def test_canonical_view_folds_sources(conn: sqlite3.Connection) -> None:
 
 
 def test_ungrouped_view_shows_both(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by EOD")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by EOD")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     items = state.list_commitments(conn, canonical_only=False)
     assert len(items) == 2
@@ -230,11 +230,11 @@ def test_ungrouped_view_shows_both(conn: sqlite3.Connection) -> None:
 def test_save_extraction_with_auto_reconcile_links(conn: sqlite3.Connection) -> None:
     # First extraction
     r1 = ExtractionResult(
-        meeting_summary="m1", participants=["Qat"],
+        meeting_summary="m1", participants=["Alice"],
         commitments=[Commitment(
-            actor="Qat", deliverable="ship v0 by Friday",
+            actor="Alice", deliverable="ship v0 by Friday",
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="x", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="x", speaker="Alice", rationale="r")],
         )],
     )
     diag = ExtractionDiagnostics(
@@ -245,11 +245,11 @@ def test_save_extraction_with_auto_reconcile_links(conn: sqlite3.Connection) -> 
 
     # Second extraction with a similar commitment, auto-reconcile on
     r2 = ExtractionResult(
-        meeting_summary="m2", participants=["Qat"],
+        meeting_summary="m2", participants=["Alice"],
         commitments=[Commitment(
-            actor="Qat", deliverable="ship v0 by friday EOD",
+            actor="Alice", deliverable="ship v0 by friday EOD",
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="y", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="y", speaker="Alice", rationale="r")],
         )],
     )
     summary = state.save_extraction(
@@ -266,8 +266,8 @@ def test_save_extraction_with_auto_reconcile_links(conn: sqlite3.Connection) -> 
 
 
 def test_show_entity_includes_merged_sources(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="ship v0", quote="quote A")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="ship v0 by EOD", quote="quote B")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="ship v0", quote="quote A")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="ship v0 by EOD", quote="quote B")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     detail = state.show_entity(conn, id1)
     assert detail is not None
@@ -280,8 +280,8 @@ def test_show_entity_includes_merged_sources(conn: sqlite3.Connection) -> None:
 
 
 def test_db_stats_counts_only_canonicals(conn: sqlite3.Connection) -> None:
-    id1 = _seed_commitment(conn, actor="Qat", deliverable="x")
-    id2 = _seed_commitment(conn, actor="Qat", deliverable="x duplicate")
+    id1 = _seed_commitment(conn, actor="Alice", deliverable="x")
+    id2 = _seed_commitment(conn, actor="Alice", deliverable="x duplicate")
     reconcile.link_entities(conn, canonical_id=id1, member_id=id2)
     s = state.stats(conn)
     assert s["commitments_open"] == 1

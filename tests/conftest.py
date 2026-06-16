@@ -49,32 +49,32 @@ def sample_diagnostics() -> ExtractionDiagnostics:
 def sample_extraction() -> ExtractionResult:
     return ExtractionResult(
         meeting_summary="Kickoff. Two commitments, one decision, one open question, one blocker.",
-        participants=["Qat", "Jason", "Taz"],
+        participants=["Alice", "Bob", "Carol"],
         commitments=[
             Commitment(
-                actor="Qat",
+                actor="Alice",
                 deliverable="v0 of Verbatim CLI",
                 deadline="EOD Wednesday",
                 confidence=Confidence.HIGH,
                 sources=[
                     SourceReference(
                         verbatim_quote="I'll have a working version by end of day Wednesday.",
-                        speaker="Qat",
+                        speaker="Alice",
                         approximate_timestamp="00:51",
                         rationale="Explicit commitment with a clear deadline.",
                     )
                 ],
             ),
             Commitment(
-                actor="Taz",
+                actor="Carol",
                 deliverable="review of v0 extraction quality",
                 deadline="Thursday morning",
-                to="Jason",
+                to="Bob",
                 confidence=Confidence.MEDIUM,
                 sources=[
                     SourceReference(
                         verbatim_quote="Yeah I can do that. Probably Thursday morning.",
-                        speaker="Taz",
+                        speaker="Carol",
                         rationale="Agreed to take it on.",
                     )
                 ],
@@ -84,14 +84,14 @@ def sample_extraction() -> ExtractionResult:
             Decision(
                 topic="language for v0",
                 outcome="Python",
-                participants=["Qat", "Taz"],
+                participants=["Alice", "Carol"],
                 rationale="Iteration speed.",
                 alternatives_considered=["TypeScript"],
                 confidence=Confidence.HIGH,
                 sources=[
                     SourceReference(
                         verbatim_quote="Python for v0.",
-                        speaker="Qat",
+                        speaker="Alice",
                         rationale="Stated decision.",
                     )
                 ],
@@ -101,14 +101,14 @@ def sample_extraction() -> ExtractionResult:
             OpenQuestion(
                 topic="API cost model",
                 question="What's the budget for ongoing API tokens?",
-                raised_by="Taz",
-                addressed_to="Jason",
+                raised_by="Carol",
+                addressed_to="Bob",
                 urgency="medium",
                 confidence=Confidence.HIGH,
                 sources=[
                     SourceReference(
                         verbatim_quote="do we have a budget for the Anthropic API tokens?",
-                        speaker="Taz",
+                        speaker="Carol",
                         rationale="Question, partial answer.",
                     )
                 ],
@@ -118,12 +118,12 @@ def sample_extraction() -> ExtractionResult:
             Blocker(
                 blocked_thing="ship public v0",
                 blocked_by="extraction quality review",
-                owner="Taz",
+                owner="Carol",
                 confidence=Confidence.MEDIUM,
                 sources=[
                     SourceReference(
                         verbatim_quote="I don't want to publish a half-baked thing.",
-                        speaker="Jason",
+                        speaker="Bob",
                         rationale="Gating on review.",
                     )
                 ],

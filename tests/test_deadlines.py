@@ -136,7 +136,7 @@ def _seed(db_path: Path, commitments: list[tuple[str, str, str | None]]) -> None
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[
                     Commitment(
                         actor=actor, deliverable=deliverable, deadline=deadline,
@@ -158,9 +158,9 @@ def _seed(db_path: Path, commitments: list[tuple[str, str, str | None]]) -> None
 def test_deadlined_commitments_annotates_status(tmp_path: Path) -> None:
     db = tmp_path / "d.db"
     _seed(db, [
-        ("Qat", "overdue thing", "2026-05-15"),
-        ("Jason", "soon thing", "2026-05-22"),
-        ("Taz", "far thing", "2026-09-01"),
+        ("Alice", "overdue thing", "2026-05-15"),
+        ("Bob", "soon thing", "2026-05-22"),
+        ("Carol", "far thing", "2026-09-01"),
         ("Moe", "vague thing", "whenever"),
     ])
     conn = state.open_db(db)
@@ -228,8 +228,8 @@ def test_due_soon_commitments_filters(tmp_path: Path) -> None:
 def test_deadlines_route_renders(tmp_path: Path) -> None:
     db = tmp_path / "d.db"
     _seed(db, [
-        ("Qat", "overdue deliverable", "2026-05-01"),
-        ("Jason", "soon deliverable", "2026-05-23"),
+        ("Alice", "overdue deliverable", "2026-05-01"),
+        ("Bob", "soon deliverable", "2026-05-23"),
     ])
     client = TestClient(web.create_app(db_path=db))
     # The route uses the real today(); seed dates are relative to TODAY which

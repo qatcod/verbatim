@@ -19,10 +19,10 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "slack_export_dir"
 def test_load_from_directory() -> None:
     export = slack_export.load(FIXTURE_DIR)
     assert "U001" in export.users
-    assert export.users["U001"] == "qat"
-    assert export.users["U002"] == "jason"
+    assert export.users["U001"] == "alice"
+    assert export.users["U002"] == "bob"
     # U003 has no display_name, falls back to real_name
-    assert export.users["U003"] == "Taz Jack"
+    assert export.users["U003"] == "Carol Carter"
     assert "general" in export.channels
     assert "random" in export.channels
     export.close()
@@ -145,11 +145,11 @@ def test_transcript_resolves_user_ids_to_names() -> None:
     unit = next(export.iter_units(min_thread_messages=3))
     export.close()
     text = unit.transcript
-    assert "@qat:" in text
-    assert "@jason:" in text
+    assert "@alice:" in text
+    assert "@bob:" in text
     # in-message @mention <@U001> should resolve too
     assert "<@U001>" not in text
-    assert "@qat" in text
+    assert "@alice" in text
 
 
 def test_source_label_format() -> None:
@@ -213,8 +213,8 @@ def test_user_map_handles_garbage() -> None:
 
 
 def test_user_mention_replacement() -> None:
-    users = {"U001": "qat"}
-    assert slack_export._replace_user_mentions("hey <@U001>", users) == "hey @qat"
+    users = {"U001": "alice"}
+    assert slack_export._replace_user_mentions("hey <@U001>", users) == "hey @alice"
     assert slack_export._replace_user_mentions("no mentions", users) == "no mentions"
     assert slack_export._replace_user_mentions("hey <@UNKNOWN>", users) == "hey <@UNKNOWN>"
 

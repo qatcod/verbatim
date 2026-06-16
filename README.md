@@ -160,9 +160,9 @@ Access tokens are short-lived (~1 hour). Get one ad-hoc from the [Google OAuth p
 
 ```bash
 verbatim query stats
-verbatim query commitments --actor Qat --min-confidence high
+verbatim query commitments --actor Alice --min-confidence high
 verbatim query decisions
-verbatim query open-questions --raised-by Jason
+verbatim query open-questions --raised-by Bob
 verbatim query blockers
 verbatim query sessions
 
@@ -279,7 +279,7 @@ For people who live in email more than Slack — execs, CFOs, anyone who wants a
 export SMTP_HOST=smtp.gmail.com
 export SMTP_USER=bot@example.com
 export SMTP_PASSWORD=...
-verbatim digest email --to qat@example.com --to jason@example.com
+verbatim digest email --to alice@example.com --to bob@example.com
 ```
 
 Renders the same content as the Slack `digest` (stats + recent commitments + open blockers + open questions) into multipart MIME — both plain text and HTML. STARTTLS by default; `--ssl` for SMTPS. SMTP works across every provider (Gmail SMTP, SES SMTP interface, SendGrid SMTP, Postmark SMTP, your own mailserver). Drop into cron for recurring digests.
@@ -298,7 +298,7 @@ Add to your Claude Code config (`~/.claude/settings.json` or workspace settings)
 }
 ```
 
-Restart Claude Code. Then you can ask: *"What did the team decide about the database choice?"* or *"What's Qat committed to this week?"* and Claude will call into Verbatim's state to answer with sourced quotes.
+Restart Claude Code. Then you can ask: *"What did the team decide about the database choice?"* or *"What's Alice committed to this week?"* and Claude will call into Verbatim's state to answer with sourced quotes.
 
 The MCP server exposes seven tools:
 
@@ -316,23 +316,23 @@ The MCP server exposes seven tools:
 
 ```markdown
 # Meeting summary
-Kickoff for the Verbatim project. Qat to ship v0 by Wednesday,
-Taz to review Thursday morning, public release decision Thursday afternoon.
+Kickoff for the Verbatim project. Alice to ship v0 by Wednesday,
+Carol to review Thursday morning, public release decision Thursday afternoon.
 
 ## Commitments
-- **Qat** — working v0 of Verbatim CLI by **end of day Wednesday**  (high confidence)
-  > [00:51] Qat: I'll have a working version by end of day Wednesday.
+- **Alice** — working v0 of Verbatim CLI by **end of day Wednesday**  (high confidence)
+  > [00:51] Alice: I'll have a working version by end of day Wednesday.
 
 ## Decisions
 - **language choice for v0** → Python  (high confidence)
-  - Participants: Qat, Taz
+  - Participants: Alice, Carol
   - Rationale: Iteration speed; MCP server language can be decided later.
   - Alternatives considered: TypeScript
-  > [01:25] Qat: Python for v0. The MCP server can be either, we'll decide when we get there.
+  > [01:25] Alice: Python for v0. The MCP server can be either, we'll decide when we get there.
 
 ## Open questions
-- **API cost model** (raised by Taz → Jason) — What's the budget for ongoing API tokens?  (medium confidence)
-  > [03:58] Taz: do we have a budget for the Anthropic API tokens?
+- **API cost model** (raised by Carol → Bob) — What's the budget for ongoing API tokens?  (medium confidence)
+  > [03:58] Carol: do we have a budget for the Anthropic API tokens?
 ```
 
 ## Roadmap

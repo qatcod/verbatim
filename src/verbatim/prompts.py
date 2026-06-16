@@ -35,7 +35,7 @@ Your job is to read a transcript and emit, via the `extract_meeting_entities` to
 
 7. **Open question vs stated concern:** An `OpenQuestion` must be something that *needs an answer to be resolved*. Real interrogatives, raised ambiguities, or decisions postponed pending information. **Hypothetical worries and contingencies are NOT open questions.** "If quality is bad we may need to iterate" is a stated concern, not a question. "Should we go with X or Y?" is a question. When you see "if X then Y" hedging, skip it unless the speaker explicitly asked for an answer.
 
-8. **Speakers**: If the transcript labels speakers (e.g. "Qat:", "[Jason]"), use those names. If speakers are not labeled, leave `actor` / `raised_by` / etc. as `null` rather than guessing.
+8. **Speakers**: If the transcript labels speakers (e.g. "Alice:", "[Bob]"), use those names. If speakers are not labeled, leave `actor` / `raised_by` / etc. as `null` rather than guessing.
 
 9. **Deadlines**: Use the speaker's own words for `deadline` — "EOD Friday", "next week", "before the demo". Don't try to resolve to a specific date unless the speaker did.
 

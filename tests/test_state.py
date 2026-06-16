@@ -32,16 +32,16 @@ def test_list_commitments_returns_all_open(
     items = state.list_commitments(conn)
     assert len(items) == 2
     actors = {i["primary_actor"] for i in items}
-    assert actors == {"Qat", "Taz"}
+    assert actors == {"Alice", "Carol"}
 
 
 def test_list_commitments_filters_by_actor(
     conn, sample_extraction, sample_diagnostics
 ) -> None:
     state.save_extraction(conn, sample_extraction, sample_diagnostics, source_path=None)
-    items = state.list_commitments(conn, actor="qat")
+    items = state.list_commitments(conn, actor="alice")
     assert len(items) == 1
-    assert items[0]["primary_actor"] == "Qat"
+    assert items[0]["primary_actor"] == "Alice"
 
 
 def test_list_commitments_filters_by_min_confidence(
@@ -68,9 +68,9 @@ def test_payload_preserves_kind_specific_fields(
     conn, sample_extraction, sample_diagnostics
 ) -> None:
     state.save_extraction(conn, sample_extraction, sample_diagnostics, source_path=None)
-    commits = state.list_commitments(conn, actor="Qat")
+    commits = state.list_commitments(conn, actor="Alice")
     payload = commits[0]["payload"]
-    assert payload["actor"] == "Qat"
+    assert payload["actor"] == "Alice"
     assert payload["deliverable"] == "v0 of Verbatim CLI"
     assert payload["deadline"] == "EOD Wednesday"
 
@@ -79,13 +79,13 @@ def test_sources_round_trip(
     conn, sample_extraction, sample_diagnostics
 ) -> None:
     state.save_extraction(conn, sample_extraction, sample_diagnostics, source_path=None)
-    items = state.list_commitments(conn, actor="Qat")
+    items = state.list_commitments(conn, actor="Alice")
     sources = items[0]["sources"]
     assert len(sources) == 1
     assert sources[0]["verbatim_quote"] == (
         "I'll have a working version by end of day Wednesday."
     )
-    assert sources[0]["speaker"] == "Qat"
+    assert sources[0]["speaker"] == "Alice"
 
 
 def test_stats(conn, sample_extraction, sample_diagnostics) -> None:

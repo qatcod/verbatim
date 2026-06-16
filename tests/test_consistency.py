@@ -30,11 +30,11 @@ from verbatim.schema import (
 def _save_one_commitment(conn: sqlite3.Connection, *, deliverable: str) -> str:
     result = ExtractionResult(
         meeting_summary="seed",
-        participants=["Qat"],
+        participants=["Alice"],
         commitments=[Commitment(
-            actor="Qat", deliverable=deliverable,
+            actor="Alice", deliverable=deliverable,
             confidence=Confidence.HIGH,
-            sources=[SourceReference(verbatim_quote="x", speaker="Qat", rationale="r")],
+            sources=[SourceReference(verbatim_quote="x", speaker="Alice", rationale="r")],
         )],
     )
     diag = ExtractionDiagnostics(
@@ -43,7 +43,7 @@ def _save_one_commitment(conn: sqlite3.Connection, *, deliverable: str) -> str:
     )
     state.save_extraction(conn, result, diag, source_path=None)
     row = conn.execute(
-        "SELECT id FROM entities WHERE primary_actor = 'Qat' "
+        "SELECT id FROM entities WHERE primary_actor = 'Alice' "
         "ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
     return row["id"]
@@ -78,7 +78,7 @@ def test_slack_bot_truncates_ids_to_8_chars() -> None:
         "id": "0123456789abcdef0123456789abcdef",
         "kind": "commitment",
         "confidence": "high",
-        "payload": {"actor": "Qat", "deliverable": "x"},
+        "payload": {"actor": "Alice", "deliverable": "x"},
         "sources": [],
         "merged_count": 0,
     }]

@@ -12,10 +12,10 @@ from verbatim.transcripts import load_transcript
 
 def test_plain_text_loads(tmp_path: Path) -> None:
     p = tmp_path / "meeting.txt"
-    p.write_text("[00:00] Qat: hello\n[00:05] Jason: hi\n", encoding="utf-8")
+    p.write_text("[00:00] Alice: hello\n[00:05] Bob: hi\n", encoding="utf-8")
     out = load_transcript(p)
-    assert "Qat: hello" in out
-    assert "Jason: hi" in out
+    assert "Alice: hello" in out
+    assert "Bob: hi" in out
 
 
 def test_collapses_blank_runs(tmp_path: Path) -> None:
@@ -39,17 +39,17 @@ def test_vtt_parsing(tmp_path: Path) -> None:
         "\n"
         "1\n"
         "00:00:00.000 --> 00:00:03.000\n"
-        "Qat: opening line\n"
+        "Alice: opening line\n"
         "\n"
         "2\n"
         "00:00:03.500 --> 00:00:06.000\n"
-        "Jason: response line\n"
+        "Bob: response line\n"
     )
     p = tmp_path / "meeting.vtt"
     p.write_text(vtt, encoding="utf-8")
     out = load_transcript(p)
-    assert "[00:00:00] Qat: opening line" in out
-    assert "[00:00:03] Jason: response line" in out
+    assert "[00:00:00] Alice: opening line" in out
+    assert "[00:00:03] Bob: response line" in out
 
 
 def test_vtt_skips_notes(tmp_path: Path) -> None:
@@ -59,13 +59,13 @@ def test_vtt_skips_notes(tmp_path: Path) -> None:
         "NOTE This is a note\n"
         "\n"
         "00:00:00.000 --> 00:00:03.000\n"
-        "Qat: hello\n"
+        "Alice: hello\n"
     )
     p = tmp_path / "meeting.vtt"
     p.write_text(vtt, encoding="utf-8")
     out = load_transcript(p)
     assert "NOTE" not in out
-    assert "Qat: hello" in out
+    assert "Alice: hello" in out
 
 
 def test_stdin_input(monkeypatch: pytest.MonkeyPatch) -> None:

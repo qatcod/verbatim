@@ -1126,7 +1126,7 @@ def fetch_person(
     commitment.actor, open_question.raised_by, blocker.owner) plus a
     JSON1-extracted bucket for decisions where the person appears in
     `payload.participants`. Match is case-insensitive substring on
-    `primary_actor`, so 'qat' resolves 'Qat' / 'Qatadah' / 'qatcod'.
+    `primary_actor`, so 'ali' resolves 'Alice' / 'Alicia' / 'alicep'.
     """
     like = f"%{name}%"
     status_clause = "" if include_resolved else " AND e.status = 'open'"

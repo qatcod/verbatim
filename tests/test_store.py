@@ -47,12 +47,12 @@ def test_insert_entity_and_sources(conn: sqlite3.Connection) -> None:
     )
     eid = store.insert_entity(
         conn, session_id=sid, kind="commitment", confidence="high",
-        payload={"actor": "Qat", "deliverable": "thing"},
-        primary_actor="Qat", primary_topic="thing", deadline="Friday",
+        payload={"actor": "Alice", "deliverable": "thing"},
+        primary_actor="Alice", primary_topic="thing", deadline="Friday",
     )
     store.insert_source(
         conn, entity_id=eid, seq=0, verbatim_quote="quoted",
-        speaker="Qat", approximate_timestamp=None, rationale="because",
+        speaker="Alice", approximate_timestamp=None, rationale="because",
     )
     sources = store.fetch_sources(conn, eid)
     assert len(sources) == 1
@@ -76,12 +76,12 @@ def test_fetch_entities_filters_by_actor_case_insensitive(conn: sqlite3.Connecti
     sid = store.insert_session(conn, source_path=None, source_kind="t",
                                 model="m", meeting_summary="", participants=[])
     store.insert_entity(conn, session_id=sid, kind="commitment", confidence="high",
-                        payload={}, primary_actor="Qat", primary_topic="x")
+                        payload={}, primary_actor="Alice", primary_topic="x")
     store.insert_entity(conn, session_id=sid, kind="commitment", confidence="high",
-                        payload={}, primary_actor="Jason", primary_topic="y")
-    out = store.fetch_entities(conn, kind="commitment", primary_actor="qat")
+                        payload={}, primary_actor="Bob", primary_topic="y")
+    out = store.fetch_entities(conn, kind="commitment", primary_actor="alice")
     assert len(out) == 1
-    assert out[0]["primary_actor"] == "Qat"
+    assert out[0]["primary_actor"] == "Alice"
 
 
 def test_fetch_entities_min_confidence_threshold(conn: sqlite3.Connection) -> None:

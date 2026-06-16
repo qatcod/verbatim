@@ -76,12 +76,12 @@ def test_constructor_requires_token() -> None:
 def test_get_users_caches_and_maps_names() -> None:
     client, fake = make_client(
         users=[
-            {"id": "U001", "profile": {"display_name_normalized": "qat"}},
-            {"id": "U002", "profile": {"real_name_normalized": "Jason Remillard"}},
+            {"id": "U001", "profile": {"display_name_normalized": "alice"}},
+            {"id": "U002", "profile": {"real_name_normalized": "Bob"}},
         ]
     )
     users = client.get_users()
-    assert users == {"U001": "qat", "U002": "Jason Remillard"}
+    assert users == {"U001": "alice", "U002": "Bob"}
 
     # second call must NOT hit the API (cache)
     users2 = client.get_users()
@@ -247,7 +247,7 @@ def test_iter_units_skips_inaccessible_channels_via_callback() -> None:
 
     client = slack_api.SlackClient(token="xoxb-test-token")
     client._client = HalfBrokenClient(  # type: ignore[assignment]
-        users=[{"id": "U001", "profile": {"display_name_normalized": "qat"}}],
+        users=[{"id": "U001", "profile": {"display_name_normalized": "alice"}}],
         channels=[
             {"id": "C001", "name": "good-channel"},
             {"id": "C002", "name": "no-access"},
@@ -308,8 +308,8 @@ def test_iter_units_reraises_when_no_callback_provided() -> None:
 def test_iter_units_combines_history_and_replies_into_threads() -> None:
     parent_ts = "1700000000.000100"
     client, _ = make_client(
-        users=[{"id": "U001", "profile": {"display_name_normalized": "qat"}},
-               {"id": "U002", "profile": {"display_name_normalized": "jason"}}],
+        users=[{"id": "U001", "profile": {"display_name_normalized": "alice"}},
+               {"id": "U002", "profile": {"display_name_normalized": "bob"}}],
         channels=[{"id": "C001", "name": "engineering"}],
         history_by_channel={
             "C001": [
@@ -338,8 +338,8 @@ def test_iter_units_combines_history_and_replies_into_threads() -> None:
     assert u.channel == "engineering"
     assert len(u.messages) == 3
     # user map applied
-    assert "@qat:" in u.transcript
-    assert "@jason:" in u.transcript
+    assert "@alice:" in u.transcript
+    assert "@bob:" in u.transcript
 
 
 def test_iter_units_respects_min_thread_messages() -> None:

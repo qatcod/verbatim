@@ -29,14 +29,14 @@ def _seed_decisions(db_path: Path, decisions: list[tuple[str, str]]) -> None:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 decisions=[
                     Decision(
-                        topic=topic, outcome=outcome, participants=["Qat"],
+                        topic=topic, outcome=outcome, participants=["Alice"],
                         confidence=Confidence.HIGH,
                         sources=[SourceReference(
                             verbatim_quote=f"{topic}: {outcome}",
-                            speaker="Qat", rationale="r",
+                            speaker="Alice", rationale="r",
                         )],
                     )
                     for topic, outcome in decisions

@@ -219,8 +219,8 @@ def render_transcript(unit: SlackUnit) -> str:
         Channel: #general
         Thread started 2024-01-15 10:30 UTC
 
-        [10:30] @qat: should we use postgres or sqlite?
-        [10:32] @jason: postgres for v1, easier to migrate
+        [10:30] @alice: should we use postgres or sqlite?
+        [10:32] @bob: postgres for v1, easier to migrate
     """
     header_lines = [f"Channel: #{unit.channel}"]
     if unit.kind == "thread":

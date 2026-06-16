@@ -59,8 +59,8 @@ def test_to_markdown_empty_extraction_states_no_items() -> None:
 def test_to_markdown_includes_participants(sample_extraction: ExtractionResult) -> None:
     md = to_markdown(sample_extraction)
     assert "**Participants:**" in md
-    assert "Qat" in md
-    assert "Jason" in md
+    assert "Alice" in md
+    assert "Bob" in md
 
 
 def test_to_markdown_decision_renders_alternatives(sample_extraction: ExtractionResult) -> None:

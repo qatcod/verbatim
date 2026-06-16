@@ -34,30 +34,30 @@ def _seed(db_path: Path) -> dict[str, str]:
         state.save_extraction(
             conn,
             ExtractionResult(
-                meeting_summary="seed", participants=["Qat"],
+                meeting_summary="seed", participants=["Alice"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="run the security review",
+                    actor="Alice", deliverable="run the security review",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="I'll run it.", speaker="Qat", rationale="r")],
+                        verbatim_quote="I'll run it.", speaker="Alice", rationale="r")],
                 )],
                 decisions=[Decision(
-                    topic="db", outcome="Postgres", participants=["Qat"],
+                    topic="db", outcome="Postgres", participants=["Alice"],
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="Postgres.", speaker="Qat", rationale="r")],
+                        verbatim_quote="Postgres.", speaker="Alice", rationale="r")],
                 )],
                 open_questions=[OpenQuestion(
-                    topic="db", question="which database?", raised_by="Qat",
+                    topic="db", question="which database?", raised_by="Alice",
                     confidence=Confidence.MEDIUM,
                     sources=[SourceReference(
-                        verbatim_quote="which db?", speaker="Qat", rationale="r")],
+                        verbatim_quote="which db?", speaker="Alice", rationale="r")],
                 )],
                 blockers=[Blocker(
                     blocked_thing="launch", blocked_by="security review",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
-                        verbatim_quote="security first.", speaker="Qat", rationale="r")],
+                        verbatim_quote="security first.", speaker="Alice", rationale="r")],
                 )],
             ),
             _diag(), source_path="m.txt",

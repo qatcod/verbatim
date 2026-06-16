@@ -28,29 +28,29 @@ def seeded_db(tmp_path: Path) -> Path:
     try:
         result = ExtractionResult(
             meeting_summary="web seed",
-            participants=["Qat", "Jason"],
+            participants=["Alice", "Bob"],
             commitments=[Commitment(
-                actor="Qat", deliverable="ship v0", deadline="Friday",
+                actor="Alice", deliverable="ship v0", deadline="Friday",
                 confidence=Confidence.HIGH,
                 sources=[SourceReference(
-                    verbatim_quote="I'll ship Friday.", speaker="Qat",
+                    verbatim_quote="I'll ship Friday.", speaker="Alice",
                     rationale="r", approximate_timestamp="10:30",
                 )],
             )],
             decisions=[Decision(
                 topic="language", outcome="Python",
-                participants=["Qat"], confidence=Confidence.HIGH,
-                sources=[SourceReference(verbatim_quote="python.", speaker="Qat", rationale="r")],
+                participants=["Alice"], confidence=Confidence.HIGH,
+                sources=[SourceReference(verbatim_quote="python.", speaker="Alice", rationale="r")],
             )],
             open_questions=[OpenQuestion(
                 topic="cost", question="What's the budget?",
-                raised_by="Taz", confidence=Confidence.MEDIUM,
-                sources=[SourceReference(verbatim_quote="budget?", speaker="Taz", rationale="r")],
+                raised_by="Carol", confidence=Confidence.MEDIUM,
+                sources=[SourceReference(verbatim_quote="budget?", speaker="Carol", rationale="r")],
             )],
             blockers=[Blocker(
                 blocked_thing="ship public", blocked_by="review",
-                owner="Taz", confidence=Confidence.LOW,
-                sources=[SourceReference(verbatim_quote="not yet.", speaker="Jason", rationale="r")],
+                owner="Carol", confidence=Confidence.LOW,
+                sources=[SourceReference(verbatim_quote="not yet.", speaker="Bob", rationale="r")],
             )],
         )
         diag = ExtractionDiagnostics(
@@ -131,7 +131,7 @@ def test_open_questions_page(client: TestClient) -> None:
     r = client.get("/open-questions")
     assert r.status_code == 200
     assert "What&#x27;s the budget?" in r.text or "What's the budget?" in r.text
-    assert "Taz" in r.text
+    assert "Carol" in r.text
 
 
 def test_blockers_page(client: TestClient) -> None:

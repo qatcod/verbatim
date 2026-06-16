@@ -72,7 +72,7 @@ class FakeWeb:
 
 
 def _seed_commitment(db_path: Path, *, deliverable: str = "ship v0",
-                     actor: str = "Qat") -> str:
+                     actor: str = "Alice") -> str:
     conn = state.open_db(db_path)
     try:
         result = ExtractionResult(
@@ -104,13 +104,13 @@ def _seed_question(db_path: Path) -> str:
     conn = state.open_db(db_path)
     try:
         result = ExtractionResult(
-            meeting_summary="seed", participants=["Taz"],
+            meeting_summary="seed", participants=["Carol"],
             open_questions=[OpenQuestion(
                 topic="staffing", question="Who runs ops?",
-                raised_by="Taz", confidence=Confidence.MEDIUM,
+                raised_by="Carol", confidence=Confidence.MEDIUM,
                 sources=[SourceReference(
                     verbatim_quote="Who runs ops?",
-                    speaker="Taz", rationale="r",
+                    speaker="Carol", rationale="r",
                 )],
             )],
         )
@@ -130,13 +130,13 @@ def _seed_blocker(db_path: Path) -> str:
     conn = state.open_db(db_path)
     try:
         result = ExtractionResult(
-            meeting_summary="seed", participants=["Qat"],
+            meeting_summary="seed", participants=["Alice"],
             blockers=[Blocker(
                 blocked_thing="launch", blocked_by="security review",
-                owner="Qat", confidence=Confidence.LOW,
+                owner="Alice", confidence=Confidence.LOW,
                 sources=[SourceReference(
                     verbatim_quote="security first.",
-                    speaker="Qat", rationale="r",
+                    speaker="Alice", rationale="r",
                 )],
             )],
         )
@@ -229,19 +229,19 @@ def test_apply_edit_updates_deliverable_and_payload(tmp_db_path: Path) -> None:
 
 
 def test_apply_edit_mirrors_actor_to_primary_column(tmp_db_path: Path) -> None:
-    eid = _seed_commitment(tmp_db_path, actor="Qat")
+    eid = _seed_commitment(tmp_db_path, actor="Alice")
     conn = state.open_db(tmp_db_path)
     try:
         slack_bot.apply_edit(
             conn, entity_id=eid,
-            submitted_values={"actor": "Jason"},
+            submitted_values={"actor": "Bob"},
             user_id="U001", user_label=None, note=None,
         )
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["primary_actor"] == "Jason"
-    assert entity["payload"]["actor"] == "Jason"
+    assert entity["primary_actor"] == "Bob"
+    assert entity["payload"]["actor"] == "Bob"
 
 
 def test_apply_edit_records_audit_row(tmp_db_path: Path) -> None:
@@ -299,19 +299,19 @@ def test_apply_edit_missing_entity_returns_error(tmp_db_path: Path) -> None:
 
 
 def test_apply_reassign_updates_primary_actor(tmp_db_path: Path) -> None:
-    eid = _seed_commitment(tmp_db_path, actor="Qat")
+    eid = _seed_commitment(tmp_db_path, actor="Alice")
     conn = state.open_db(tmp_db_path)
     try:
         slack_bot.apply_reassign(
             conn, entity_id=eid,
-            new_actor_label="Taz", slack_user_id="UTAZ",
+            new_actor_label="Carol", slack_user_id="UTAZ",
             submitter_id="U001", note=None,
         )
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["primary_actor"] == "Taz"
-    assert entity["payload"]["actor"] == "Taz"
+    assert entity["primary_actor"] == "Carol"
+    assert entity["payload"]["actor"] == "Carol"
 
 
 def test_apply_reassign_mirrors_to_blocker_owner(tmp_db_path: Path) -> None:
@@ -320,13 +320,13 @@ def test_apply_reassign_mirrors_to_blocker_owner(tmp_db_path: Path) -> None:
     try:
         slack_bot.apply_reassign(
             conn, entity_id=eid,
-            new_actor_label="Jason", slack_user_id="UJSN",
+            new_actor_label="Bob", slack_user_id="UJSN",
             submitter_id="U001", note=None,
         )
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["payload"]["owner"] == "Jason"
+    assert entity["payload"]["owner"] == "Bob"
 
 
 def test_apply_reassign_mirrors_to_question_raised_by(tmp_db_path: Path) -> None:
@@ -335,13 +335,13 @@ def test_apply_reassign_mirrors_to_question_raised_by(tmp_db_path: Path) -> None
     try:
         slack_bot.apply_reassign(
             conn, entity_id=eid,
-            new_actor_label="Qat", slack_user_id="UQAT",
+            new_actor_label="Alice", slack_user_id="UQAT",
             submitter_id="U001", note=None,
         )
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["payload"]["raised_by"] == "Qat"
+    assert entity["payload"]["raised_by"] == "Alice"
 
 
 def test_apply_reassign_records_audit_with_slack_id(tmp_db_path: Path) -> None:
@@ -350,7 +350,7 @@ def test_apply_reassign_records_audit_with_slack_id(tmp_db_path: Path) -> None:
     try:
         slack_bot.apply_reassign(
             conn, entity_id=eid,
-            new_actor_label="Taz", slack_user_id="UTAZ",
+            new_actor_label="Carol", slack_user_id="UTAZ",
             submitter_id="U001", note="needs new lead",
         )
         audit = store.fetch_audit(conn, eid)
@@ -483,9 +483,9 @@ def test_handle_view_submission_edit_applies_changes(tmp_db_path: Path) -> None:
 
 
 def test_handle_view_submission_reassign_resolves_slack_user(tmp_db_path: Path) -> None:
-    eid = _seed_commitment(tmp_db_path, actor="Qat")
+    eid = _seed_commitment(tmp_db_path, actor="Alice")
     web = FakeWeb()
-    web.add_user("UTAZ", display="Taz", real="Taz Y.")
+    web.add_user("UTAZ", display="Carol", real="Carol Y.")
     bot = _make_bot(tmp_db_path, web)
     payload = {
         "type": "view_submission",
@@ -509,7 +509,7 @@ def test_handle_view_submission_reassign_resolves_slack_user(tmp_db_path: Path) 
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["primary_actor"] == "Taz"
+    assert entity["primary_actor"] == "Carol"
     assert "UTAZ" in web.users_info_calls
 
 
@@ -517,7 +517,7 @@ def test_handle_view_submission_reassign_name_override_wins(tmp_db_path: Path) -
     """Override name field beats the Slack-resolved name."""
     eid = _seed_commitment(tmp_db_path)
     web = FakeWeb()
-    web.add_user("UTAZ", display="Taz")
+    web.add_user("UTAZ", display="Carol")
     bot = _make_bot(tmp_db_path, web)
     payload = {
         "type": "view_submission",
@@ -529,7 +529,7 @@ def test_handle_view_submission_reassign_name_override_wins(tmp_db_path: Path) -
                     "verbatim_reassign_user": {
                         "user": {"selected_user": "UTAZ"}
                     },
-                    "verbatim_reassign_name": {"name": {"value": "Taz Y."}},
+                    "verbatim_reassign_name": {"name": {"value": "Carol Y."}},
                     "verbatim_reassign_note": {"note": {"value": ""}},
                 },
             },
@@ -541,4 +541,4 @@ def test_handle_view_submission_reassign_name_override_wins(tmp_db_path: Path) -
         entity = store.fetch_entity(conn, eid)
     finally:
         conn.close()
-    assert entity["primary_actor"] == "Taz Y."
+    assert entity["primary_actor"] == "Carol Y."

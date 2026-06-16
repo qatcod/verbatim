@@ -18,7 +18,7 @@ from verbatim.schema import (
 def _ref() -> SourceReference:
     return SourceReference(
         verbatim_quote="test quote",
-        speaker="Qat",
+        speaker="Alice",
         rationale="because.",
     )
 

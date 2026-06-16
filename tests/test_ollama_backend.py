@@ -37,15 +37,15 @@ def _good_tool_call_response() -> dict[str, Any]:
     """Build a minimal OpenAI-compat response that contains a valid extraction."""
     args = {
         "meeting_summary": "Quick sync.",
-        "participants": ["Qat", "Jason"],
+        "participants": ["Alice", "Bob"],
         "commitments": [{
-            "actor": "Qat",
+            "actor": "Alice",
             "deliverable": "ship v0",
             "deadline": "Friday",
             "confidence": "high",
             "sources": [{
                 "verbatim_quote": "I'll ship Friday.",
-                "speaker": "Qat",
+                "speaker": "Alice",
                 "rationale": "explicit",
             }],
         }],
@@ -88,14 +88,14 @@ def test_extract_ollama_happy_path(monkeypatch) -> None:
 
     monkeypatch.setenv("OLLAMA_HOST", "http://test.local:11434")
     result, diag = extractor._extract_ollama(
-        "Qat: I'll ship Friday.",
+        "Alice: I'll ship Friday.",
         "llama3.1:8b",
         max_tokens=4096,
         http_client=client,
     )
 
     assert len(result.commitments) == 1
-    assert result.commitments[0].actor == "Qat"
+    assert result.commitments[0].actor == "Alice"
     assert result.commitments[0].sources[0].verbatim_quote == "I'll ship Friday."
 
     # Diagnostics carry the model prefix and the right token usage
@@ -137,7 +137,7 @@ def test_extract_dispatches_to_ollama_for_ollama_model(monkeypatch) -> None:
 
     monkeypatch.setattr(ext_module, "_extract_ollama", fake_ollama)
     result, diag = ext_module.extract(
-        "Qat: I'll ship Friday.",
+        "Alice: I'll ship Friday.",
         model="ollama:qwen2.5:7b",
     )
     assert len(calls) == 1

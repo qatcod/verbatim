@@ -2,6 +2,15 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.13.2] — 2026-06-16
+
+### Changed
+Sample / fixture / docstring data scrubbed to the standard Alice / Bob /
+Carol / Dave / Eve / Frank / Grace / Heidi cast. No real names in the
+shipped wheel, the README, the landing page, the LLM system prompt, the
+slack-export test fixtures, or anywhere else in the repo. Test logic
+unchanged.
+
 ## [0.13.1] — 2026-06-16
 
 ### Fixed
@@ -24,14 +33,14 @@ channels parsed from each session's `slack://#channel/...` source_path.
 
 Every entity now carries a short integer **code** (`#1`, `#2`, … `#330293`)
 in addition to its UUID. Codes are global sequential, assigned on insert,
-and visible everywhere — Slack replies, CLI tables, web detail. They're the
-paste-able handle Jason asked for so people can say "del #330293" without
-copying a 32-character hex.
+and visible everywhere — Slack replies, CLI tables, web detail. They're
+the paste-able handle for in-Slack triage: short, unambiguous, easy to
+type into a thread without copying a 32-character hex.
 
-Entities also carry the Slack **channel** they came from, denormalized from
-`source_path` into its own indexed column. That makes the second half of
-Jason's ask cheap: a `/verbatim` slash command run *inside a channel*
-defaults to results from that channel only.
+Entities also carry the Slack **channel** they came from, denormalized
+from `source_path` into its own indexed column. That makes channel scoping
+cheap: a `/verbatim` slash command run *inside a channel* defaults to
+results from that channel only.
 
 ### Added — Slack: `del`, `resolve`, and channel-scoped queries
 
@@ -71,10 +80,10 @@ from each session's `source_path`. Older surfaces keep working unchanged.
   `#code`, migration backfill on an existing DB.
 
 ### Why
-Jason's ask in three parts: short reference codes (`#330293`), the ability
-to dismiss an item from inside Slack (`/verbatim del #330293`), and
-channel-scoped state so a Slack-side conversation about that channel's
-backlog isn't drowned in everything else. All three land here.
+Three connected pieces: short reference codes (`#330293`), the ability to
+dismiss an item from inside Slack (`/verbatim del #330293`), and
+channel-scoped state so a Slack-side conversation about a channel's
+backlog isn't drowned in every other channel's noise.
 
 ## [0.12.3] — 2026-05-21
 
@@ -494,8 +503,8 @@ in the state graph, sorted by frequency. Case-only duplicates ("Qat" vs
 A "People" item now sits in the web UI sidebar between Blockers and
 Sessions, with a live count of known people.
 
-Match is case-insensitive substring — `query person qat` resolves "Qat",
-"Qatadah", or "qatcod" alike.
+Match is case-insensitive substring — `query person ali` resolves "Alice",
+"Alicia", or "alicep" alike.
 
 ### Added — Docker image (ghcr.io/qatcod/verbatim-ai)
 

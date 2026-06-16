@@ -33,40 +33,40 @@ def seeded_db(tmp_path: Path) -> Path:
             conn,
             ExtractionResult(
                 meeting_summary="seed",
-                participants=["Qat", "Jason"],
+                participants=["Alice", "Bob"],
                 commitments=[Commitment(
-                    actor="Qat", deliverable="ship the Xero pilot by Friday",
+                    actor="Alice", deliverable="ship the Xero pilot by Friday",
                     deadline="Friday", confidence=Confidence.HIGH,
                     sources=[SourceReference(
                         verbatim_quote="I'll ship the Xero pilot by Friday.",
-                        speaker="Qat", rationale="r",
+                        speaker="Alice", rationale="r",
                     )],
                 )],
                 decisions=[Decision(
                     topic="database choice", outcome="Postgres",
-                    participants=["Qat", "Jason"],
+                    participants=["Alice", "Bob"],
                     rationale="multi-writer concerns with SQLite",
                     confidence=Confidence.HIGH,
                     sources=[SourceReference(
-                        verbatim_quote="Postgres, definitely.", speaker="Jason",
+                        verbatim_quote="Postgres, definitely.", speaker="Bob",
                         rationale="r",
                     )],
                 )],
                 open_questions=[OpenQuestion(
                     topic="staffing", question="Who reviews the Xero pull request?",
-                    raised_by="Taz", confidence=Confidence.MEDIUM,
+                    raised_by="Carol", confidence=Confidence.MEDIUM,
                     sources=[SourceReference(
-                        verbatim_quote="who's reviewing this?", speaker="Taz",
+                        verbatim_quote="who's reviewing this?", speaker="Carol",
                         rationale="r",
                     )],
                 )],
                 blockers=[Blocker(
                     blocked_thing="public launch",
                     blocked_by="security review",
-                    owner="Qat", confidence=Confidence.LOW,
+                    owner="Alice", confidence=Confidence.LOW,
                     sources=[SourceReference(
                         verbatim_quote="security needs to clear it first.",
-                        speaker="Jason", rationale="r",
+                        speaker="Bob", rationale="r",
                     )],
                 )],
             ),
@@ -88,11 +88,11 @@ def client(seeded_db: Path) -> TestClient:
 def test_search_matches_commitment_by_actor(seeded_db: Path) -> None:
     conn = state.open_db(seeded_db)
     try:
-        out = state.search(conn, "qat")
+        out = state.search(conn, "alice")
     finally:
         conn.close()
     assert len(out["commitment"]) == 1
-    assert out["commitment"][0]["primary_actor"] == "Qat"
+    assert out["commitment"][0]["primary_actor"] == "Alice"
 
 
 def test_search_matches_decision_by_topic(seeded_db: Path) -> None:

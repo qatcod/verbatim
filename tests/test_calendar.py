@@ -24,15 +24,15 @@ def test_event_transcript_includes_agenda_and_attendees() -> None:
         source="google",
         event_id="abc",
         title="Verbatim launch sync",
-        description="Decide the launch date. Qat to prep the HN post.",
-        organizer="qat@example.com",
+        description="Decide the launch date. Alice to prep the HN post.",
+        organizer="alice@example.com",
         start=datetime(2026, 5, 20, 14, 0, tzinfo=timezone.utc),
-        attendees=["Qat", "Jason"],
+        attendees=["Alice", "Bob"],
         location="Zoom",
     )
     t = event.transcript
     assert "Verbatim launch sync" in t
-    assert "Qat, Jason" in t
+    assert "Alice, Bob" in t
     assert "Decide the launch date" in t
     assert "Zoom" in t
     assert "2026-05-20 14:00 UTC" in t
@@ -99,10 +99,10 @@ def test_google_iter_events_parses_items() -> None:
                     "status": "confirmed",
                     "summary": "Roadmap review",
                     "description": "Agenda: ship v0.11",
-                    "organizer": {"email": "qat@example.com"},
+                    "organizer": {"email": "alice@example.com"},
                     "attendees": [
-                        {"displayName": "Qat"},
-                        {"email": "jason@example.com"},
+                        {"displayName": "Alice"},
+                        {"email": "bob@example.com"},
                     ],
                     "start": {"dateTime": "2026-05-20T14:00:00Z"},
                     "end": {"dateTime": "2026-05-20T15:00:00Z"},
@@ -117,8 +117,8 @@ def test_google_iter_events_parses_items() -> None:
     assert len(events) == 1
     e = events[0]
     assert e.title == "Roadmap review"
-    assert e.organizer == "qat@example.com"
-    assert e.attendees == ["Qat", "jason@example.com"]
+    assert e.organizer == "alice@example.com"
+    assert e.attendees == ["Alice", "bob@example.com"]
     assert e.source == "google"
 
 
@@ -207,10 +207,10 @@ def test_outlook_iter_events_parses_value_array() -> None:
                     "isCancelled": False,
                     "subject": "Sprint planning",
                     "bodyPreview": "Plan the sprint",
-                    "organizer": {"emailAddress": {"name": "Jason"}},
+                    "organizer": {"emailAddress": {"name": "Bob"}},
                     "attendees": [
-                        {"emailAddress": {"name": "Qat"}},
-                        {"emailAddress": {"address": "taz@example.com"}},
+                        {"emailAddress": {"name": "Alice"}},
+                        {"emailAddress": {"address": "carol@example.com"}},
                     ],
                     "start": {"dateTime": "2026-05-20T09:00:00", "timeZone": "UTC"},
                     "end": {"dateTime": "2026-05-20T10:00:00", "timeZone": "UTC"},
@@ -225,8 +225,8 @@ def test_outlook_iter_events_parses_value_array() -> None:
     assert len(events) == 1
     e = events[0]
     assert e.title == "Sprint planning"
-    assert e.organizer == "Jason"
-    assert e.attendees == ["Qat", "taz@example.com"]
+    assert e.organizer == "Bob"
+    assert e.attendees == ["Alice", "carol@example.com"]
     assert e.location == "Teams"
     assert e.source == "outlook"
 
