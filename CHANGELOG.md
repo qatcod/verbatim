@@ -2,6 +2,64 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-06-16
+
+### Added — Channel-scoped state + short numeric codes
+
+Every entity now carries a short integer **code** (`#1`, `#2`, … `#330293`)
+in addition to its UUID. Codes are global sequential, assigned on insert,
+and visible everywhere — Slack replies, CLI tables, web detail. They're the
+paste-able handle Jason asked for so people can say "del #330293" without
+copying a 32-character hex.
+
+Entities also carry the Slack **channel** they came from, denormalized from
+`source_path` into its own indexed column. That makes the second half of
+Jason's ask cheap: a `/verbatim` slash command run *inside a channel*
+defaults to results from that channel only.
+
+### Added — Slack: `del`, `resolve`, and channel-scoped queries
+
+- `/verbatim del #330293` — soft-dismiss an item by code. Status flips to
+  `dismissed`, audit row written, entity row preserved (recoverable).
+- `/verbatim resolve #330293` — mark resolved, same audit pattern.
+- `/verbatim show #330293` — entity detail, now showing the short code
+  instead of the long UUID.
+- `/verbatim commitments` (and decisions / questions / blockers / stats)
+  scope to the current channel by default. Append `all` to span every
+  channel: `/verbatim commitments all`.
+- The result footer says `_(scoped to #channel-name)_` when scoping is in
+  effect, so there's no ambiguity.
+
+### Added — CLI: `verbatim del`, code-aware references
+
+- `verbatim del #330293` — CLI mirror of the Slack command.
+- `verbatim resolve` now accepts `#code`, `VRB-code`, bare integer, or
+  UUID prefix.
+
+### Schema migration
+Additive: adds `entities.code` (INTEGER UNIQUE) and `entities.channel`
+(TEXT) columns plus indexes. On first open of an existing DB, both are
+backfilled — codes in row-insert order (oldest = 1), channels parsed
+from each session's `source_path`. Older surfaces keep working unchanged.
+
+### Tests
+- 26 new tests in `tests/test_codes_and_channels.py`: source-path channel
+  parsing across slack thread / channel-day / non-slack forms, code
+  assignment + uniqueness + sequential ordering, channel column populate
+  + filter + leading-hash strip, `list_known_channels`, `parse_entity_code`
+  across every accepted form (`#N`, `N`, `VRB-N`, garbage), `fetch_entity_
+  by_code`, `db_stats(channel=)`, every channel-scoped variant of
+  `list_*` helpers, Slack `dispatch_command` for `del` / `resolve` /
+  `show #code` / channel-scoped commitments + stats / `all` keyword
+  override / unknown code error path, `format_commitments` uses
+  `#code`, migration backfill on an existing DB.
+
+### Why
+Jason's ask in three parts: short reference codes (`#330293`), the ability
+to dismiss an item from inside Slack (`/verbatim del #330293`), and
+channel-scoped state so a Slack-side conversation about that channel's
+backlog isn't drowned in everything else. All three land here.
+
 ## [0.12.3] — 2026-05-21
 
 ### Added — Plain-language simplify mode

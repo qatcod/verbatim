@@ -1400,23 +1400,69 @@ def query_cost(db: Path | None = typer.Option(None, "--db")) -> None:
     )
 
 
+def _resolve_ref(conn, token: str) -> str | None:
+    """Resolve `#330293`, `330293`, `VRB-330293`, or a UUID prefix → full id."""
+    code = store.parse_entity_code(token)
+    if code is not None:
+        entity = store.fetch_entity_by_code(conn, code)
+        if entity is not None:
+            return entity["id"]
+    return _resolve_id_prefix(conn, token.lstrip("#"))
+
+
 @app.command(name="resolve")
 def resolve_cmd(
-    entity_id: str = typer.Argument(..., help="Entity ID prefix (8+ chars) or full ID."),
+    entity_ref: str = typer.Argument(
+        ..., help="Entity reference: #330293, VRB-330293, or a UUID prefix.",
+    ),
     db: Path | None = typer.Option(None, "--db"),
 ) -> None:
     """Mark an entity as resolved."""
     conn = state.open_db(db)
     try:
-        full_id = _resolve_id_prefix(conn, entity_id)
+        full_id = _resolve_ref(conn, entity_ref)
         if full_id is None:
-            err_console.print(f"[red]No entity matches id prefix '{entity_id}'.[/red]")
+            err_console.print(f"[red]No entity matches '{entity_ref}'.[/red]")
             raise typer.Exit(code=1)
         ok = state.resolve_entity(conn, full_id)
     finally:
         conn.close()
     if ok:
         console.print(f"[green]✓[/green] resolved {full_id}")
+    else:
+        err_console.print("[yellow]Nothing changed.[/yellow]")
+
+
+@app.command(name="del")
+def del_cmd(
+    entity_ref: str = typer.Argument(
+        ..., help="Entity reference: #330293, VRB-330293, or a UUID prefix.",
+    ),
+    db: Path | None = typer.Option(None, "--db"),
+) -> None:
+    """Dismiss an item — removes it from active queries but keeps the audit trail.
+
+    Matches the `/verbatim del #330293` Slack command. Soft delete: the row
+    isn't removed, just marked `dismissed`; restore by updating its status
+    via the web UI.
+    """
+    conn = state.open_db(db)
+    try:
+        full_id = _resolve_ref(conn, entity_ref)
+        if full_id is None:
+            err_console.print(f"[red]No entity matches '{entity_ref}'.[/red]")
+            raise typer.Exit(code=1)
+        ok = store.update_entity_status(conn, full_id, "dismissed")
+        if ok:
+            store.record_audit(
+                conn, entity_id=full_id, action="dismiss",
+                actor_id=None, actor_label="CLI",
+                before={"status": "open"}, after={"status": "dismissed"},
+            )
+    finally:
+        conn.close()
+    if ok:
+        console.print(f"[green]✓[/green] dismissed {full_id}")
     else:
         err_console.print("[yellow]Nothing changed.[/yellow]")
 

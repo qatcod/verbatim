@@ -215,7 +215,8 @@ def test_format_entity_detail_includes_quotes(seeded_conn) -> None:
     entity = state.show_entity(seeded_conn, items[0]["id"])
     text = slack_bot.format_entity_detail(entity)
     assert "I'll ship Wed." in text
-    assert items[0]["id"] in text
+    # v0.13.0 — detail view shows the short `#<code>` reference, not the full UUID.
+    assert f"#{entity['code']}" in text
 
 
 # ----- dispatch_command -----

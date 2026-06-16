@@ -50,6 +50,8 @@ def save_extraction(
     match exists (>= reconcile_threshold). The reconciliation count is returned
     on the IngestSummary.
     """
+    channel = store.parse_channel_from_source(source_path)
+
     with store.tx(conn):
         session_id = store.insert_session(
             conn,
@@ -75,6 +77,7 @@ def save_extraction(
                 primary_actor=c.actor,
                 primary_topic=c.deliverable,
                 deadline=c.deadline,
+                channel=channel,
             )
             _persist_sources(conn, entity_id, c.sources)
             counts["commitment"] += 1
@@ -88,6 +91,7 @@ def save_extraction(
                 payload=_decision_payload(d),
                 primary_actor=None,
                 primary_topic=d.topic,
+                channel=channel,
             )
             _persist_sources(conn, entity_id, d.sources)
             counts["decision"] += 1
@@ -101,6 +105,7 @@ def save_extraction(
                 payload=_question_payload(q),
                 primary_actor=q.raised_by,
                 primary_topic=q.topic,
+                channel=channel,
             )
             _persist_sources(conn, entity_id, q.sources)
             counts["open_question"] += 1
@@ -114,6 +119,7 @@ def save_extraction(
                 payload=_blocker_payload(b),
                 primary_actor=b.owner,
                 primary_topic=b.blocked_thing,
+                channel=channel,
             )
             _persist_sources(conn, entity_id, b.sources)
             counts["blocker"] += 1
@@ -144,6 +150,7 @@ def list_commitments(
     actor: str | None = None,
     min_confidence: str | None = None,
     status: str | None = "open",
+    channel: str | None = None,
     canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -153,6 +160,7 @@ def list_commitments(
         primary_actor=actor,
         min_confidence=min_confidence,
         status=status,
+        channel=channel,
         canonical_only=canonical_only,
         limit=limit,
     )
@@ -163,6 +171,7 @@ def list_decisions(
     *,
     min_confidence: str | None = None,
     status: str | None = "open",
+    channel: str | None = None,
     canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -171,6 +180,7 @@ def list_decisions(
         kind="decision",
         min_confidence=min_confidence,
         status=status,
+        channel=channel,
         canonical_only=canonical_only,
         limit=limit,
     )
@@ -181,6 +191,7 @@ def list_open_questions(
     *,
     raised_by: str | None = None,
     min_confidence: str | None = None,
+    channel: str | None = None,
     canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -190,6 +201,7 @@ def list_open_questions(
         primary_actor=raised_by,
         min_confidence=min_confidence,
         status="open",
+        channel=channel,
         canonical_only=canonical_only,
         limit=limit,
     )
@@ -200,6 +212,7 @@ def list_blockers(
     *,
     owner: str | None = None,
     min_confidence: str | None = None,
+    channel: str | None = None,
     canonical_only: bool = True,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -209,6 +222,7 @@ def list_blockers(
         primary_actor=owner,
         min_confidence=min_confidence,
         status="open",
+        channel=channel,
         canonical_only=canonical_only,
         limit=limit,
     )
@@ -237,8 +251,10 @@ def resolve_entity(conn: sqlite3.Connection, entity_id: str) -> bool:
     return store.update_entity_status(conn, entity_id, "resolved")
 
 
-def stats(conn: sqlite3.Connection) -> dict[str, int]:
-    return store.db_stats(conn)
+def stats(
+    conn: sqlite3.Connection, *, channel: str | None = None,
+) -> dict[str, int]:
+    return store.db_stats(conn, channel=channel)
 
 
 def search(

@@ -107,16 +107,30 @@ def parse_command_text(text: str) -> ParsedCommand:
 
 def format_help() -> str:
     return (
-        "*Verbatim* — query your team's operational state.\n\n"
+        "*Verbatim* — query your team's operational state, scoped to this channel.\n\n"
         "• `/verbatim commitments [actor]` — open commitments\n"
         "• `/verbatim decisions` — recent decisions\n"
         "• `/verbatim questions` — unresolved questions\n"
         "• `/verbatim blockers [owner]` — current blockers\n"
         "• `/verbatim stats` — counts overview\n"
-        "• `/verbatim show <id-prefix>` — entity detail with sources\n"
+        "• `/verbatim show #330293` — entity detail with sources (also accepts UUID prefix)\n"
+        "• `/verbatim del #330293` — dismiss an item by its code\n"
+        "• `/verbatim resolve #330293` — mark an item resolved\n"
         "• `/verbatim ask <question>` — ask in plain English\n"
-        "• `/verbatim simplify <id-prefix>` — explain an item, jargon-free\n"
+        "• `/verbatim simplify #330293` — explain an item, jargon-free\n"
+        "\n"
+        "By default, results are scoped to the channel you ran the command in. "
+        "Append `all` to any subcommand to span every channel — "
+        "e.g. `/verbatim commitments all` or `/verbatim stats all`."
     )
+
+
+def _short_ref(entity: dict[str, Any]) -> str:
+    """Compact, paste-able reference: `#330293` if a code is set, else `VRB-xxxxxxxx`."""
+    code = entity.get("code")
+    if code:
+        return f"#{code}"
+    return f"VRB-{entity['id'][:8]}"
 
 
 def format_commitments(items: list[dict[str, Any]]) -> str:
@@ -129,10 +143,11 @@ def format_commitments(items: list[dict[str, Any]]) -> str:
         to = f" → {p['to']}" if p.get("to") else ""
         conf = _conf_emoji(it["confidence"])
         merged = _merged_pill_text(it.get("merged_count", 0))
+        ref = _short_ref(it)
         lines.append(
-            f"{conf} *{p.get('actor') or '?'}*{to} — {p.get('deliverable') or '?'}{deadline}{merged}"
+            f"{conf} `{ref}` *{p.get('actor') or '?'}*{to} — "
+            f"{p.get('deliverable') or '?'}{deadline}{merged}"
         )
-        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -144,10 +159,13 @@ def format_decisions(items: list[dict[str, Any]]) -> str:
         p = it["payload"]
         conf = _conf_emoji(it["confidence"])
         merged = _merged_pill_text(it.get("merged_count", 0))
-        lines.append(f"{conf} *{p.get('topic') or '?'}* → {p.get('outcome') or '?'}{merged}")
+        ref = _short_ref(it)
+        lines.append(
+            f"{conf} `{ref}` *{p.get('topic') or '?'}* → "
+            f"{p.get('outcome') or '?'}{merged}"
+        )
         if p.get("rationale"):
             lines.append(f"      _{p['rationale']}_")
-        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -159,11 +177,12 @@ def format_questions(items: list[dict[str, Any]]) -> str:
         p = it["payload"]
         conf = _conf_emoji(it["confidence"])
         addressed = f" → *{p['addressed_to']}*" if p.get("addressed_to") else ""
+        ref = _short_ref(it)
         lines.append(
-            f"{conf} *{p.get('topic') or '?'}* — {p.get('question') or '?'}"
-            f"{addressed}  _(raised by {p.get('raised_by') or '?'})_"
+            f"{conf} `{ref}` *{p.get('topic') or '?'}* — "
+            f"{p.get('question') or '?'}{addressed}  "
+            f"_(raised by {p.get('raised_by') or '?'})_"
         )
-        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -175,10 +194,11 @@ def format_blockers(items: list[dict[str, Any]]) -> str:
         p = it["payload"]
         conf = _conf_emoji(it["confidence"])
         owner = f"  *owner*: {p['owner']}" if p.get("owner") else ""
+        ref = _short_ref(it)
         lines.append(
-            f"{conf} *{p.get('blocked_thing') or '?'}* blocked by *{p.get('blocked_by') or '?'}*{owner}"
+            f"{conf} `{ref}` *{p.get('blocked_thing') or '?'}* blocked by "
+            f"*{p.get('blocked_by') or '?'}*{owner}"
         )
-        lines.append(f"      _id: `{it['id'][:8]}…`_")
     return "\n".join(lines)
 
 
@@ -198,8 +218,9 @@ def format_entity_detail(entity: dict[str, Any]) -> str:
     """Detail view for /verbatim show <id-prefix>."""
     p = entity["payload"]
     conf = _conf_emoji(entity["confidence"])
+    channel_suffix = f"  _from_ #{entity['channel']}" if entity.get("channel") else ""
     lines: list[str] = [
-        f"{conf} *{entity['kind']}*  `{entity['id']}`",
+        f"{conf} *{entity['kind']}*  `{_short_ref(entity)}`{channel_suffix}",
     ]
     if entity["kind"] == "commitment":
         deadline = f"  *by* {p['deadline']}" if p.get("deadline") else ""
@@ -368,6 +389,7 @@ def dispatch_action(
     entity = state.show_entity(conn, entity_id)
     if entity is None:
         return f"_Entity `{entity_id[:8]}…` not found — it may have been deleted._"
+    ref = _short_ref(entity)
 
     if verb == "confirm":
         store.update_entity_status(conn, entity_id, "confirmed")
@@ -380,7 +402,7 @@ def dispatch_action(
         attribution = f" by <@{user_id}>" if user_id else ""
         return (
             f":white_check_mark: Confirmed{attribution}. "
-            f"`VRB-{entity_id[:8]}` is now marked as a confirmed *{entity['kind']}* "
+            f"`{ref}` is now marked as a confirmed *{entity['kind']}* "
             f"({actor})."
         )
     if verb == "dismiss":
@@ -390,10 +412,10 @@ def dispatch_action(
             actor_id=user_id, actor_label=f"<@{user_id}>" if user_id else None,
             before={"status": "open"}, after={"status": "dismissed"},
         )
+        attribution = f" by <@{user_id}>" if user_id else ""
         return (
-            f":x: Dismissed `VRB-{entity_id[:8]}` — it won't appear in active "
-            "queries. Run `verbatim unlink` or update via the web UI if this was "
-            "an accident."
+            f":x: Dismissed `{ref}`{attribution} — it won't appear in active "
+            "queries. To bring it back, run `verbatim resolve` on the web UI."
         )
     if verb == "edit":
         return (
@@ -744,55 +766,108 @@ def _merged_pill_text(merged_count: int) -> str:
 # ----------------------- dispatch -----------------------
 
 
-def dispatch_command(parsed: ParsedCommand, conn: sqlite3.Connection) -> str:
-    """Route a parsed subcommand to the right state query, return Slack mrkdwn."""
+def dispatch_command(
+    parsed: ParsedCommand,
+    conn: sqlite3.Connection,
+    *,
+    channel: str | None = None,
+    user_id: str | None = None,
+) -> str:
+    """Route a parsed subcommand to the right state query, return Slack mrkdwn.
+
+    `channel` is the Slack channel name the command was invoked in (without
+    leading `#`). When present, list queries (`commitments`, `decisions`,
+    `questions`, `blockers`, `stats`) default to this channel's items.
+    Append `all` as the last arg to span every channel instead.
+    """
     sub = parsed.subcommand
+
+    # Detect the explicit "all" override and strip it from args.
+    args = list(parsed.args)
+    all_channels = False
+    if args and args[-1].lower() == "all":
+        all_channels = True
+        args.pop()
+    scope_channel = None if all_channels else channel
+    scope_label = "" if all_channels or not channel else f" in #{channel}"
 
     if sub == "help":
         return format_help()
     if sub == "stats":
-        return format_stats(state.stats(conn))
+        return format_stats(state.stats(conn, channel=scope_channel))
     if sub == "commitments":
-        actor = parsed.args[0] if parsed.args else None
-        items = state.list_commitments(conn, actor=actor, limit=DEFAULT_LIST_LIMIT)
-        return format_commitments(items)
+        actor = args[0] if args else None
+        items = state.list_commitments(
+            conn, actor=actor, channel=scope_channel, limit=DEFAULT_LIST_LIMIT,
+        )
+        return format_commitments(items) + (f"\n_(scoped to #{channel})_" if scope_channel else "")
     if sub == "decisions":
-        items = state.list_decisions(conn, limit=DEFAULT_LIST_LIMIT)
-        return format_decisions(items)
+        items = state.list_decisions(
+            conn, channel=scope_channel, limit=DEFAULT_LIST_LIMIT,
+        )
+        return format_decisions(items) + (f"\n_(scoped to #{channel})_" if scope_channel else "")
     if sub == "questions":
-        items = state.list_open_questions(conn, limit=DEFAULT_LIST_LIMIT)
-        return format_questions(items)
+        items = state.list_open_questions(
+            conn, channel=scope_channel, limit=DEFAULT_LIST_LIMIT,
+        )
+        return format_questions(items) + (f"\n_(scoped to #{channel})_" if scope_channel else "")
     if sub == "blockers":
-        owner = parsed.args[0] if parsed.args else None
-        items = state.list_blockers(conn, owner=owner, limit=DEFAULT_LIST_LIMIT)
-        return format_blockers(items)
+        owner = args[0] if args else None
+        items = state.list_blockers(
+            conn, owner=owner, channel=scope_channel, limit=DEFAULT_LIST_LIMIT,
+        )
+        return format_blockers(items) + (f"\n_(scoped to #{channel})_" if scope_channel else "")
     if sub == "show":
-        if not parsed.args:
-            return "_Usage: `/verbatim show <id-prefix>`_"
-        prefix = parsed.args[0]
-        full_id = _resolve_id_prefix(conn, prefix)
+        if not args:
+            return "_Usage: `/verbatim show #330293`_"
+        full_id = _resolve_entity_ref(conn, args[0])
         if full_id is None:
-            return f"_No entity matches id prefix `{prefix}`._"
+            return f"_No entity matches `{args[0]}`._"
         entity = state.show_entity(conn, full_id)
         if entity is None:
             return f"_Entity not found: `{full_id}`._"
         return format_entity_detail(entity)
+    if sub in ("del", "dismiss"):
+        if not args:
+            return f"_Usage: `/verbatim {sub} #330293`_"
+        full_id = _resolve_entity_ref(conn, args[0])
+        if full_id is None:
+            return f"_No entity matches `{args[0]}`._"
+        reply = dispatch_action(conn, verb="dismiss", entity_id=full_id, user_id=user_id)
+        return reply
+    if sub == "resolve":
+        if not args:
+            return "_Usage: `/verbatim resolve #330293`_"
+        full_id = _resolve_entity_ref(conn, args[0])
+        if full_id is None:
+            return f"_No entity matches `{args[0]}`._"
+        ok = state.resolve_entity(conn, full_id)
+        if ok:
+            store.record_audit(
+                conn, entity_id=full_id, action="resolve",
+                actor_id=user_id,
+                actor_label=f"<@{user_id}>" if user_id else None,
+                before={"status": "open"}, after={"status": "resolved"},
+            )
+        entity = store.fetch_entity(conn, full_id)
+        code_str = f"#{entity['code']}" if entity and entity.get("code") else f"VRB-{full_id[:8]}"
+        return f":white_check_mark: Resolved `{code_str}`."
     if sub == "ask":
-        if not parsed.args:
+        if not args:
             return "_Usage: `/verbatim ask <question>`_"
-        question = " ".join(parsed.args)
+        question = " ".join(args)
         try:
             result = ask.answer(conn, question)
         except Exception as e:  # noqa: BLE001
             log.exception("ask failed")
             return f"_Couldn't answer that — {e}_"
-        return f":mag: *{_escape_mrkdwn(question)}*\n\n{result.answer}"
+        return f":mag: *{_escape_mrkdwn(question)}*\n\n{result.answer}{scope_label}"
     if sub == "simplify":
-        if not parsed.args:
-            return "_Usage: `/verbatim simplify <id-prefix>`_"
-        full_id = _resolve_id_prefix(conn, parsed.args[0])
+        if not args:
+            return "_Usage: `/verbatim simplify #330293`_"
+        full_id = _resolve_entity_ref(conn, args[0])
         if full_id is None:
-            return f"_No entity matches id prefix `{parsed.args[0]}`._"
+            return f"_No entity matches `{args[0]}`._"
         try:
             result = simplify.simplify_entity(conn, full_id)
         except Exception as e:  # noqa: BLE001
@@ -800,7 +875,9 @@ def dispatch_command(parsed: ParsedCommand, conn: sqlite3.Connection) -> str:
             return f"_Couldn't simplify that — {e}_"
         if result is None:
             return f"_Entity not found: `{full_id}`._"
-        return f":bulb: *Plain-language* `VRB-{full_id[:8]}`\n\n{result.text}"
+        entity = store.fetch_entity(conn, full_id)
+        code_str = f"#{entity['code']}" if entity and entity.get("code") else f"VRB-{full_id[:8]}"
+        return f":bulb: *Plain-language* `{code_str}`\n\n{result.text}"
 
     return f"_Unknown subcommand `{sub}`._\n\n{format_help()}"
 
@@ -813,6 +890,20 @@ def _resolve_id_prefix(conn: sqlite3.Connection, prefix: str) -> str | None:
     if len(rows) == 1:
         return rows[0]["id"]
     return None
+
+
+def _resolve_entity_ref(conn: sqlite3.Connection, token: str) -> str | None:
+    """Resolve a user-supplied entity reference to a full entity id.
+
+    Tries the integer code first (`#330293`, `330293`, `VRB-330293`), then
+    falls back to a UUID-prefix match. Returns None if neither resolves.
+    """
+    code = store.parse_entity_code(token)
+    if code is not None:
+        entity = store.fetch_entity_by_code(conn, code)
+        if entity is not None:
+            return entity["id"]
+    return _resolve_id_prefix(conn, token.lstrip("#"))
 
 
 # ----------------------- bot -----------------------
@@ -989,6 +1080,7 @@ class VerbatimSlackBot:
         text = payload.get("text") or ""
         response_url = payload.get("response_url")
         channel_id = payload.get("channel_id")
+        channel_name = payload.get("channel_name") or None
         user_id = payload.get("user_id")
         if not response_url and not channel_id:
             log.warning("slash command had no response_url or channel_id: %r", payload)
@@ -997,7 +1089,9 @@ class VerbatimSlackBot:
         parsed = parse_command_text(text)
         conn = state.open_db(self._db_path)
         try:
-            body = dispatch_command(parsed, conn)
+            body = dispatch_command(
+                parsed, conn, channel=channel_name, user_id=user_id,
+            )
         finally:
             conn.close()
 

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
+    code INTEGER UNIQUE,
     session_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     confidence TEXT NOT NULL,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS entities (
     primary_actor TEXT,
     primary_topic TEXT,
     deadline TEXT,
+    channel TEXT,
     payload_json TEXT NOT NULL,
     canonical_id TEXT,
     merged_at TEXT,
@@ -57,6 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_entities_actor ON entities(primary_actor);
 CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
 CREATE INDEX IF NOT EXISTS idx_entities_session ON entities(session_id);
 CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id);
+CREATE INDEX IF NOT EXISTS idx_entities_code ON entities(code);
+CREATE INDEX IF NOT EXISTS idx_entities_channel ON entities(channel);
 
 CREATE TABLE IF NOT EXISTS entity_sources (
     id TEXT PRIMARY KEY,
@@ -146,6 +150,33 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id)")
     if "merged_at" not in existing_cols:
         conn.execute("ALTER TABLE entities ADD COLUMN merged_at TEXT")
+
+    # v0.13.0: short numeric code + channel column on entities
+    if "code" not in existing_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN code INTEGER")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_code ON entities(code)")
+        # Backfill codes in row-insert order (oldest gets lowest code)
+        rows = conn.execute(
+            "SELECT id FROM entities ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+        for i, r in enumerate(rows, start=1):
+            conn.execute(
+                "UPDATE entities SET code = ? WHERE id = ?", (i, r["id"]),
+            )
+    if "channel" not in existing_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN channel TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_channel ON entities(channel)")
+        # Backfill channel by parsing source_path on the entity's session
+        rows = conn.execute(
+            "SELECT e.id, s.source_path FROM entities e "
+            "JOIN sessions s ON s.id = e.session_id"
+        ).fetchall()
+        for r in rows:
+            ch = parse_channel_from_source(r["source_path"])
+            if ch:
+                conn.execute(
+                    "UPDATE entities SET channel = ? WHERE id = ?", (ch, r["id"]),
+                )
 
     # entity_audit table (added in v0.10.1). Older DBs predate the SCHEMA
     # declaration, so an explicit CREATE TABLE IF NOT EXISTS keeps them
@@ -281,6 +312,26 @@ def insert_session(
     return session_id
 
 
+def parse_channel_from_source(source_path: str | None) -> str | None:
+    """Extract a Slack channel name from a source_path like
+    `slack://#channel-name/thread/...` or `slack://#channel-name/day/...`.
+
+    Returns None for non-slack sources (transcripts, GitHub PRs, calendar
+    events) — those don't have a Slack channel association.
+    """
+    if not source_path or not source_path.startswith("slack://"):
+        return None
+    rest = source_path[len("slack://"):]
+    head = rest.split("/", 1)[0]
+    return head.lstrip("#") or None
+
+
+def next_entity_code(conn: sqlite3.Connection) -> int:
+    """Return the next sequential code for a new entity (1-based, monotonic)."""
+    row = conn.execute("SELECT COALESCE(MAX(code), 0) + 1 AS next FROM entities").fetchone()
+    return int(row["next"])
+
+
 def insert_entity(
     conn: sqlite3.Connection,
     *,
@@ -291,19 +342,22 @@ def insert_entity(
     primary_actor: str | None,
     primary_topic: str | None,
     deadline: str | None = None,
+    channel: str | None = None,
     status: str = "open",
 ) -> str:
     entity_id = new_id()
+    code = next_entity_code(conn)
     conn.execute(
         """
         INSERT INTO entities (
-            id, session_id, kind, confidence, status,
-            primary_actor, primary_topic, deadline,
+            id, code, session_id, kind, confidence, status,
+            primary_actor, primary_topic, deadline, channel,
             payload_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             entity_id,
+            code,
             session_id,
             kind,
             confidence,
@@ -311,6 +365,7 @@ def insert_entity(
             primary_actor,
             primary_topic,
             deadline,
+            channel,
             json.dumps(payload, ensure_ascii=False),
             utc_now_iso(),
         ),
@@ -370,6 +425,7 @@ def fetch_entities(
     status: str | None = "open",
     min_confidence: str | None = None,
     session_id: str | None = None,
+    channel: str | None = None,
     canonical_only: bool = True,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
@@ -381,6 +437,7 @@ def fetch_entities(
     `merged_count` reports how many siblings are linked.
 
     Pass `canonical_only=False` to see every entity individually (no group folding).
+    Pass `channel="some-channel"` to scope to a single Slack channel.
     """
     conditions: list[str] = []
     params: list[Any] = []
@@ -396,6 +453,9 @@ def fetch_entities(
     if session_id:
         conditions.append("session_id = ?")
         params.append(session_id)
+    if channel:
+        conditions.append("LOWER(channel) = LOWER(?)")
+        params.append(channel.lstrip("#"))
     if canonical_only:
         conditions.append("canonical_id IS NULL")
     if min_confidence:
@@ -408,8 +468,8 @@ def fetch_entities(
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     query = f"""
-        SELECT id, session_id, kind, confidence, status,
-               primary_actor, primary_topic, deadline,
+        SELECT id, code, session_id, kind, confidence, status,
+               primary_actor, primary_topic, deadline, channel,
                payload_json, canonical_id, merged_at, created_at
         FROM entities
         {where}
@@ -445,12 +505,59 @@ def _fetch_merged_member_ids(conn: sqlite3.Connection, canonical_id: str) -> lis
     return [r["id"] for r in rows]
 
 
+def parse_entity_code(token: str) -> int | None:
+    """Parse a user-supplied entity reference into an integer code.
+
+    Accepts forms: `#330293`, `330293`, `VRB-330293` (case-insensitive).
+    Returns None if the token isn't a recognizable code (e.g., it's a UUID
+    prefix instead). Callers fall back to UUID-prefix resolution in that case.
+    """
+    if token is None:
+        return None
+    s = token.strip().lstrip("#")
+    if s.upper().startswith("VRB-"):
+        s = s[4:]
+    try:
+        n = int(s)
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
+def fetch_entity_by_code(
+    conn: sqlite3.Connection, code: int,
+) -> dict[str, Any] | None:
+    """Look up an entity by its numeric code. Returns the entity dict + sources."""
+    row = conn.execute("SELECT id FROM entities WHERE code = ?", (code,)).fetchone()
+    if row is None:
+        return None
+    return fetch_entity(conn, row["id"])
+
+
+def list_known_channels(
+    conn: sqlite3.Connection, *, status: str = "open",
+) -> list[dict[str, Any]]:
+    """List Slack channels that have at least one entity in the given status."""
+    rows = conn.execute(
+        """
+        SELECT channel, COUNT(*) AS total
+        FROM entities
+        WHERE channel IS NOT NULL AND channel <> '' AND status = ?
+              AND canonical_id IS NULL
+        GROUP BY channel
+        ORDER BY total DESC
+        """,
+        (status,),
+    ).fetchall()
+    return [{"channel": r["channel"], "total": r["total"]} for r in rows]
+
+
 def fetch_entity(conn: sqlite3.Connection, entity_id: str) -> dict[str, Any] | None:
     """Fetch a single entity by id, no folding."""
     row = conn.execute(
         """
-        SELECT id, session_id, kind, confidence, status,
-               primary_actor, primary_topic, deadline,
+        SELECT id, code, session_id, kind, confidence, status,
+               primary_actor, primary_topic, deadline, channel,
                payload_json, canonical_id, merged_at, created_at
         FROM entities
         WHERE id = ?
@@ -791,16 +898,29 @@ def fetch_audit(
     return out
 
 
-def db_stats(conn: sqlite3.Connection) -> dict[str, int]:
-    """Quick counts for status display. Counts canonical entities only."""
-    out = {}
+def db_stats(
+    conn: sqlite3.Connection, *, channel: str | None = None,
+) -> dict[str, int]:
+    """Quick counts for status display. Counts canonical entities only.
+
+    Pass `channel="foo"` to scope counts to entities from that Slack channel
+    (sessions and entities_merged remain global since they're not
+    channel-scoped concepts).
+    """
+    out: dict[str, int] = {}
+    ch = channel.lstrip("#") if channel else None
     out["sessions"] = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    base = (
+        "SELECT COUNT(*) FROM entities "
+        "WHERE kind = ? AND status = 'open' AND canonical_id IS NULL"
+    )
     for kind in ("commitment", "decision", "open_question", "blocker"):
-        out[f"{kind}s_open"] = conn.execute(
-            "SELECT COUNT(*) FROM entities "
-            "WHERE kind = ? AND status = 'open' AND canonical_id IS NULL",
-            (kind,),
-        ).fetchone()[0]
+        if ch is not None:
+            out[f"{kind}s_open"] = conn.execute(
+                base + " AND LOWER(channel) = LOWER(?)", (kind, ch),
+            ).fetchone()[0]
+        else:
+            out[f"{kind}s_open"] = conn.execute(base, (kind,)).fetchone()[0]
     out["entities_merged"] = conn.execute(
         "SELECT COUNT(*) FROM entities WHERE canonical_id IS NOT NULL"
     ).fetchone()[0]
