@@ -59,8 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_entities_actor ON entities(primary_actor);
 CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
 CREATE INDEX IF NOT EXISTS idx_entities_session ON entities(session_id);
 CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_id);
-CREATE INDEX IF NOT EXISTS idx_entities_code ON entities(code);
-CREATE INDEX IF NOT EXISTS idx_entities_channel ON entities(channel);
+-- code + channel indexes live in _migrate, not here, so legacy DBs
+-- (missing those columns) don't fail on executescript.
 
 CREATE TABLE IF NOT EXISTS entity_sources (
     id TEXT PRIMARY KEY,

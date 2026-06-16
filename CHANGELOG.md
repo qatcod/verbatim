@@ -2,6 +2,22 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] — 2026-06-16
+
+### Fixed
+The v0.13.0 SCHEMA included `CREATE INDEX … ON entities(code)` and
+`… ON entities(channel)`, which fire on every connection open. On an
+existing DB those columns don't exist yet (they're added later by
+`_migrate`), so the index statements failed with `no such column: code`
+before migration could run, and the install was unusable against any
+existing state. The new index creation now lives in `_migrate` only, so
+fresh DBs get them via the migration's `CREATE INDEX IF NOT EXISTS` after
+the `ALTER TABLE ADD COLUMN` lands.
+
+Verified live: pod at v0.13.0 was failing to open the DB; v0.13.1 wheel
+side-loaded and migration completed cleanly — codes 1–576 backfilled,
+channels parsed from each session's `slack://#channel/...` source_path.
+
 ## [0.13.0] — 2026-06-16
 
 ### Added — Channel-scoped state + short numeric codes
