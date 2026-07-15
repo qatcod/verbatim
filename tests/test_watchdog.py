@@ -223,3 +223,126 @@ def test_safe_check_passes_through_normal_result() -> None:
     result = watchdog.safe_check(normal, name="calm")
     assert result.status == "ok"
     assert result.detail == "everything fine"
+
+
+# ----- alert rendering + webhook -----
+
+
+def test_human_duration_minutes() -> None:
+    assert watchdog.human_duration(180) == "3m"
+
+
+def test_human_duration_hours_minutes() -> None:
+    assert watchdog.human_duration(3600 + 12 * 60) == "1h 12m"
+
+
+def test_human_duration_days_hours() -> None:
+    assert watchdog.human_duration(86400 + 4 * 3600) == "1d 4h"
+
+
+def test_render_alert_down_contains_name_and_duration() -> None:
+    now = datetime(2026, 7, 16, 12, 4, 0, tzinfo=timezone.utc)
+    prev = watchdog.CheckState(
+        status="ok",
+        since=(now - timedelta(minutes=4)).isoformat(),
+        last_alerted=None, detail="",
+    )
+    check = watchdog.Check(name="verbatim-slack-bot", status="fail", detail="FATAL")
+    payload = watchdog.render_alert(check, prev, now=now, kind="down")
+    text = payload["text"]
+    assert "verbatim-slack-bot" in text
+    assert "DOWN" in text.upper()
+    assert "FATAL" in text
+
+
+def test_render_alert_recovered_contains_duration() -> None:
+    now = datetime(2026, 7, 16, 12, 47, 0, tzinfo=timezone.utc)
+    prev = watchdog.CheckState(
+        status="fail",
+        since=(now - timedelta(minutes=42)).isoformat(),
+        last_alerted=(now - timedelta(minutes=30)).isoformat(),
+        detail="FATAL",
+    )
+    check = watchdog.Check(name="verbatim-slack-bot", status="ok")
+    payload = watchdog.render_alert(check, prev, now=now, kind="recovered")
+    text = payload["text"]
+    assert "RECOVERED" in text.upper() or "recovered" in text.lower()
+    assert "42m" in text or "42 m" in text
+
+
+def test_render_alert_reminder_contains_still_down() -> None:
+    now = datetime(2026, 7, 16, 13, 26, 0, tzinfo=timezone.utc)
+    prev = watchdog.CheckState(
+        status="fail",
+        since=(now - timedelta(hours=1, minutes=12)).isoformat(),
+        last_alerted=(now - timedelta(minutes=32)).isoformat(),
+        detail="FATAL",
+    )
+    check = watchdog.Check(name="verbatim-slack-bot", status="fail", detail="FATAL")
+    payload = watchdog.render_alert(check, prev, now=now, kind="reminder")
+    text = payload["text"]
+    assert "still" in text.lower()
+    assert "1h 12m" in text
+
+
+def test_render_systemic_alert_lists_all_names_no_details() -> None:
+    checks = [
+        watchdog.Check(name="a", status="fail", detail="d1"),
+        watchdog.Check(name="b", status="fail", detail="d2"),
+        watchdog.Check(name="c", status="fail", detail="d3"),
+        watchdog.Check(name="d", status="fail", detail="d4"),
+        watchdog.Check(name="e", status="fail", detail="d5"),
+        watchdog.Check(name="f", status="fail", detail="d6"),
+    ]
+    payload = watchdog.render_systemic_alert(checks)
+    text = payload["text"]
+    for name in "abcdef":
+        assert name in text
+    # Should NOT dump each detail — the point is to coalesce, not spam.
+    assert "d1" not in text and "d6" not in text
+
+
+def test_post_webhook_ok_first_try() -> None:
+    calls: list[dict] = []
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append({"body": req.read()})
+        return httpx.Response(200, text="ok")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ok = watchdog.post_webhook(
+        "https://hooks.slack.com/services/T/B/X",
+        payload={"text": "hi"},
+        client=client,
+    )
+    assert ok is True
+    assert len(calls) == 1
+
+
+def test_post_webhook_retries_once_on_failure() -> None:
+    call_count = {"n": 0}
+    def handler(req: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(500, text="boom")
+        return httpx.Response(200, text="ok")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ok = watchdog.post_webhook(
+        "https://hooks.slack.com/services/T/B/X",
+        payload={"text": "hi"},
+        client=client,
+    )
+    assert ok is True
+    assert call_count["n"] == 2
+
+
+def test_post_webhook_gives_up_after_retry(tmp_path: Path) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    log_path = tmp_path / "watchdog.log"
+    with patch.object(watchdog, "LOG_PATH", log_path):
+        ok = watchdog.post_webhook(
+            "https://hooks.slack.com/services/T/B/X",
+            payload={"text": "hi"},
+            client=client,
+        )
+    assert ok is False

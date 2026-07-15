@@ -18,6 +18,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -281,4 +282,132 @@ def safe_check(fn: Callable[[], Check], *, name: str) -> Check:
         return Check(
             name=name, status="fail",
             detail=f"check function raised: {type(exc).__name__}: {exc}",
+        )
+
+
+# ----- alert rendering -----
+
+
+def human_duration(seconds: float) -> str:
+    """Compact human duration: '3m', '1h 12m', '1d 4h'. Rounds down."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if hours < 24:
+        if rem_min:
+            return f"{hours}h {rem_min}m"
+        return f"{hours}h"
+    days = hours // 24
+    rem_h = hours % 24
+    if rem_h:
+        return f"{days}d {rem_h}h"
+    return f"{days}d"
+
+
+def render_alert(
+    check: Check,
+    previous: CheckState | None,
+    *,
+    now: datetime,
+    kind: Literal["down", "recovered", "reminder"],
+) -> dict[str, str]:
+    """Slack text payload for one check's transition or reminder."""
+    if kind == "down":
+        # duration = how long since we were last ok. previous.since is when the
+        # ok run began, so "down since NOW".
+        text = (
+            f":rotating_light: *{check.name}* is DOWN\n"
+            f"down since: {now.isoformat()} (just now)\n"
+            f"detail: {check.detail or '(no detail)'}\n"
+            f"fix: ssh into the pod, run "
+            f"`supervisorctl restart {check.name}` or check "
+            f"`/opt/verbatim/logs/{check.name}.err.log`"
+        )
+        return {"text": text}
+    if kind == "recovered":
+        down_since = (
+            datetime.fromisoformat(previous.since.replace("Z", "+00:00"))
+            if previous else now
+        )
+        if down_since.tzinfo is None:
+            down_since = down_since.replace(tzinfo=timezone.utc)
+        duration = human_duration((now - down_since).total_seconds())
+        text = (
+            f":white_check_mark: *{check.name}* RECOVERED\n"
+            f"was down for: {duration}\n"
+            f"now: {check.detail or 'ok'}"
+        )
+        return {"text": text}
+    # kind == "reminder"
+    if previous is None:
+        return {"text": f":rotating_light: *{check.name}* STILL DOWN"}
+    down_since = datetime.fromisoformat(previous.since.replace("Z", "+00:00"))
+    if down_since.tzinfo is None:
+        down_since = down_since.replace(tzinfo=timezone.utc)
+    duration = human_duration((now - down_since).total_seconds())
+    text = (
+        f":rotating_light: *{check.name}* STILL DOWN\n"
+        f"down for: {duration}\n"
+        f"detail: {check.detail or previous.detail or '(no detail)'}"
+    )
+    return {"text": text}
+
+
+def render_systemic_alert(failed_checks: list[Check]) -> dict[str, str]:
+    """Coalesced alert for a total-outage situation: lists names, no per-check
+    details."""
+    names = ", ".join(c.name for c in failed_checks)
+    text = (
+        f":rotating_light: *SYSTEMIC OUTAGE* — "
+        f"{len(failed_checks)} checks failed in this tick\n"
+        f"{names}\n"
+        f"fix: investigate pod networking / power / DNS. "
+        f"Individual check details in `/opt/verbatim/logs/watchdog.log`."
+    )
+    return {"text": text}
+
+
+# ----- webhook client -----
+
+
+def post_webhook(
+    webhook_url: str,
+    payload: dict[str, str],
+    *,
+    client: httpx.Client | None = None,
+) -> bool:
+    """POST payload to a Slack Incoming Webhook. One retry with 2s backoff.
+    Returns True on success (2xx), False after retry exhaustion. Logs failure
+    to LOG_PATH so the payload isn't lost."""
+    owned = client is None
+    c = client or httpx.Client(timeout=10.0)
+    try:
+        for attempt in range(2):
+            try:
+                resp = c.post(webhook_url, json=payload)
+                if 200 <= resp.status_code < 300:
+                    return True
+            except httpx.RequestError:
+                pass
+            if attempt == 0:
+                time.sleep(2)
+        # Both attempts failed.
+        _log_dropped_alert(payload)
+        return False
+    finally:
+        if owned:
+            c.close()
+
+
+def _log_dropped_alert(payload: dict[str, str]) -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LOG_PATH.open("a") as f:
+        f.write(
+            f"[{_now_iso()}] webhook POST failed after retry. "
+            f"Dropped payload: {json.dumps(payload)}\n"
         )
