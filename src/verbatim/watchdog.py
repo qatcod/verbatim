@@ -15,11 +15,16 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+
+import httpx
 
 # ----- paths + config -----
 
@@ -105,3 +110,175 @@ def save_state(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ----- checks -----
+
+
+def check_supervisord_alive() -> Check:
+    """Is supervisord running at all? Uses pgrep, not supervisorctl (which needs
+    the supervisord socket)."""
+    proc = subprocess.run(
+        ["pgrep", "-x", "supervisord"], capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        return Check(name="supervisord", status="ok")
+    return Check(
+        name="supervisord",
+        status="fail",
+        detail="supervisord process not found via pgrep",
+    )
+
+
+def check_daemon(name: str) -> Check:
+    """Is the named supervisord-managed daemon in RUNNING state?"""
+    proc = subprocess.run(
+        ["supervisorctl", "status", name],
+        capture_output=True, text=True,
+    )
+    output = (proc.stdout or "").strip()
+    if "RUNNING" in output:
+        return Check(name=name, status="ok", detail=output)
+    return Check(name=name, status="fail", detail=output or "no output")
+
+
+def check_slack_api(
+    bot_token: str, *, client: httpx.Client | None = None,
+) -> Check:
+    """Slack auth.test — verifies the bot token is still valid."""
+    owned = client is None
+    c = client or httpx.Client(timeout=10.0)
+    try:
+        resp = c.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {bot_token}"},
+        )
+        data = resp.json()
+    finally:
+        if owned:
+            c.close()
+    if data.get("ok") is True:
+        return Check(name="slack-api", status="ok")
+    err = data.get("error", "unknown")
+    return Check(name="slack-api", status="fail", detail=f"slack auth.test error: {err}")
+
+
+def check_anthropic_api(
+    api_key: str, *, client: httpx.Client | None = None,
+) -> Check:
+    """Reachability probe for the Anthropic API. Specifically flags credit
+    exhaustion (400 with 'credit balance' message) as fail. All other 4xx
+    responses are treated as ok — the endpoint is reachable, we just deliberately
+    sent an invalid request."""
+    owned = client is None
+    c = client or httpx.Client(timeout=10.0)
+    try:
+        resp = c.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={"model": "claude-sonnet-4-6", "max_tokens": 1, "messages": []},
+        )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+    finally:
+        if owned:
+            c.close()
+    message = (data.get("error") or {}).get("message", "")
+    if "credit" in message.lower():
+        return Check(
+            name="anthropic-api", status="fail",
+            detail=f"credit exhausted: {message}",
+        )
+    return Check(name="anthropic-api", status="ok")
+
+
+def check_db_silence(
+    db_path: Path,
+    *,
+    warn_hours: int = 24,
+    fail_hours: int = 48,
+    now: datetime | None = None,
+) -> Check:
+    """Time since the newest entity insert. warn at ≥warn_hours, fail at
+    ≥fail_hours. Never touched the DB → status=warn with "no writes yet"."""
+    now = now or datetime.now(timezone.utc)
+    if not db_path.exists():
+        return Check(name="db-silence", status="warn", detail="db file missing")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute("SELECT MAX(created_at) FROM entities").fetchone()
+    finally:
+        conn.close()
+    latest = row[0] if row else None
+    if not latest:
+        return Check(name="db-silence", status="warn", detail="no writes yet")
+    try:
+        latest_dt = datetime.fromisoformat(latest.replace("Z", "+00:00"))
+    except ValueError:
+        return Check(
+            name="db-silence", status="warn",
+            detail=f"unparseable timestamp: {latest!r}",
+        )
+    if latest_dt.tzinfo is None:
+        latest_dt = latest_dt.replace(tzinfo=timezone.utc)
+    hours = (now - latest_dt).total_seconds() / 3600.0
+    if hours >= fail_hours:
+        return Check(
+            name="db-silence", status="fail",
+            detail=f"no new items for {hours:.1f}h (≥{fail_hours}h)",
+        )
+    if hours >= warn_hours:
+        return Check(
+            name="db-silence", status="warn",
+            detail=f"no new items for {hours:.1f}h",
+        )
+    return Check(name="db-silence", status="ok")
+
+
+def check_canary_freshness(
+    state_canary: str | None,
+    *,
+    stale_after_min: int = 15,
+    now: datetime | None = None,
+) -> Check:
+    """'Watchdog watches watchdog': if the previous tick's canary timestamp is
+    older than stale_after_min, this run detects that the watchdog itself has
+    not been running. First-ever run (canary is None) returns ok."""
+    if state_canary is None:
+        return Check(name="canary", status="ok")
+    now = now or datetime.now(timezone.utc)
+    try:
+        canary_dt = datetime.fromisoformat(state_canary.replace("Z", "+00:00"))
+    except ValueError:
+        return Check(
+            name="canary", status="fail",
+            detail=f"unparseable canary timestamp: {state_canary!r}",
+        )
+    if canary_dt.tzinfo is None:
+        canary_dt = canary_dt.replace(tzinfo=timezone.utc)
+    minutes = (now - canary_dt).total_seconds() / 60.0
+    if minutes > stale_after_min:
+        return Check(
+            name="canary", status="fail",
+            detail=f"canary stale — last watchdog run {minutes:.1f}m ago",
+        )
+    return Check(name="canary", status="ok")
+
+
+def safe_check(fn: Callable[[], Check], *, name: str) -> Check:
+    """Wrap a check_* invocation. If it raises, produce a fail Check with the
+    exception details, so a broken check appears as an alert rather than
+    crashing the whole watchdog."""
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001
+        return Check(
+            name=name, status="fail",
+            detail=f"check function raised: {type(exc).__name__}: {exc}",
+        )
