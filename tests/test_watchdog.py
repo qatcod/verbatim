@@ -346,3 +346,145 @@ def test_post_webhook_gives_up_after_retry(tmp_path: Path) -> None:
             client=client,
         )
     assert ok is False
+
+
+# ----- state machine: diff_and_alert -----
+
+
+class FakePoster:
+    """Records POSTed payloads instead of hitting the network."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, webhook_url, payload, **kwargs):
+        self.calls.append(payload)
+        return True
+
+
+def test_first_run_no_alerts_fire() -> None:
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    checks = [watchdog.Check(name="supervisord", status="ok")]
+    poster = FakePoster()
+    updated = watchdog.diff_and_alert(
+        checks, previous={}, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert poster.calls == []
+    assert updated["supervisord"].status == "ok"
+
+
+def test_ok_to_ok_no_alert() -> None:
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(status="ok", since=now.isoformat())}
+    checks = [watchdog.Check(name="x", status="ok")]
+    poster = FakePoster()
+    watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert poster.calls == []
+
+
+def test_ok_to_fail_fires_down_alert() -> None:
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(status="ok", since=now.isoformat())}
+    checks = [watchdog.Check(name="x", status="fail", detail="broken")]
+    poster = FakePoster()
+    updated = watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert len(poster.calls) == 1
+    assert "DOWN" in poster.calls[0]["text"].upper()
+    assert updated["x"].status == "fail"
+    assert updated["x"].last_alerted is not None
+
+
+def test_fail_to_fail_within_reminder_window_no_alert() -> None:
+    now = datetime(2026, 7, 16, 12, 5, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(
+        status="fail",
+        since=(now - timedelta(minutes=5)).isoformat(),
+        last_alerted=(now - timedelta(minutes=5)).isoformat(),
+        detail="broken",
+    )}
+    checks = [watchdog.Check(name="x", status="fail", detail="broken")]
+    poster = FakePoster()
+    watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert poster.calls == []
+
+
+def test_fail_to_fail_past_reminder_fires_still_down() -> None:
+    now = datetime(2026, 7, 16, 12, 32, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(
+        status="fail",
+        since=(now - timedelta(minutes=32)).isoformat(),
+        last_alerted=(now - timedelta(minutes=32)).isoformat(),
+        detail="broken",
+    )}
+    checks = [watchdog.Check(name="x", status="fail", detail="broken")]
+    poster = FakePoster()
+    updated = watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert len(poster.calls) == 1
+    assert "STILL" in poster.calls[0]["text"].upper()
+    # last_alerted must have advanced.
+    assert updated["x"].last_alerted == now.isoformat()
+
+
+def test_fail_to_ok_fires_recovered_and_clears_last_alerted() -> None:
+    now = datetime(2026, 7, 16, 12, 47, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(
+        status="fail",
+        since=(now - timedelta(minutes=42)).isoformat(),
+        last_alerted=(now - timedelta(minutes=30)).isoformat(),
+        detail="broken",
+    )}
+    checks = [watchdog.Check(name="x", status="ok")]
+    poster = FakePoster()
+    updated = watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert len(poster.calls) == 1
+    assert "RECOVERED" in poster.calls[0]["text"].upper()
+    assert updated["x"].status == "ok"
+    assert updated["x"].last_alerted is None
+
+
+def test_warn_to_fail_fires_down_alert() -> None:
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    prev = {"x": watchdog.CheckState(
+        status="warn",
+        since=(now - timedelta(hours=1)).isoformat(),
+    )}
+    checks = [watchdog.Check(name="x", status="fail", detail="crossed threshold")]
+    poster = FakePoster()
+    watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster,
+    )
+    assert len(poster.calls) == 1
+
+
+def test_systemic_outage_coalesces_into_one_alert() -> None:
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    prev = {}  # everything currently ok
+    checks = [
+        watchdog.Check(name=f"c{i}", status="fail", detail=f"detail-{i}")
+        for i in range(7)
+    ]
+    poster = FakePoster()
+    watchdog.diff_and_alert(
+        checks, previous=prev, webhook_url="w", reminder_min=30,
+        now=now, post_fn=poster, systemic_threshold=5,
+    )
+    # 7 fails → 1 systemic alert, not 7 down alerts.
+    assert len(poster.calls) == 1
+    assert "SYSTEMIC" in poster.calls[0]["text"].upper()

@@ -411,3 +411,105 @@ def _log_dropped_alert(payload: dict[str, str]) -> None:
             f"[{_now_iso()}] webhook POST failed after retry. "
             f"Dropped payload: {json.dumps(payload)}\n"
         )
+
+
+# ----- state machine -----
+
+
+def diff_and_alert(
+    current: list[Check],
+    previous: dict[str, CheckState],
+    webhook_url: str,
+    reminder_min: int,
+    *,
+    now: datetime,
+    systemic_threshold: int = 5,
+    post_fn: Callable[..., bool] | None = None,
+) -> dict[str, CheckState]:
+    """Compare current check results to previous state, dispatch alerts on
+    transitions or stuck-in-fail reminders, and return the updated state dict
+    for save_state to persist. Returns the updated state — does NOT save it.
+    Set post_fn to a fake in tests; defaults to post_webhook.
+    """
+    post = post_fn or post_webhook
+    updated: dict[str, CheckState] = {}
+    down_transitions: list[Check] = []
+    reminders: list[tuple[Check, CheckState]] = []
+    recoveries: list[tuple[Check, CheckState]] = []
+
+    for check in current:
+        old = previous.get(check.name)
+        if old is None:
+            # First-run: seed. If already failing, treat as a down_transition
+            # to permit systemic coalescing on boot.
+            if check.status == "fail":
+                down_transitions.append(check)
+            updated[check.name] = CheckState(
+                status=check.status,
+                since=now.isoformat(),
+                last_alerted=now.isoformat() if check.status == "fail" else None,
+                detail=check.detail,
+            )
+            continue
+
+        transitioned = old.status != check.status
+        if transitioned:
+            if check.status == "fail":
+                down_transitions.append(check)
+            elif old.status == "fail" and check.status == "ok":
+                recoveries.append((check, old))
+            # warn transitions (ok→warn, warn→ok, warn→warn) don't alert here.
+            updated[check.name] = CheckState(
+                status=check.status,
+                since=now.isoformat(),
+                last_alerted=now.isoformat() if check.status == "fail" else None,
+                detail=check.detail,
+            )
+        else:
+            # Same status. Check for stuck-in-fail reminder.
+            stuck_reminder = False
+            if (
+                check.status == "fail"
+                and old.last_alerted is not None
+            ):
+                last_alerted_dt = datetime.fromisoformat(
+                    old.last_alerted.replace("Z", "+00:00"),
+                )
+                if last_alerted_dt.tzinfo is None:
+                    last_alerted_dt = last_alerted_dt.replace(tzinfo=timezone.utc)
+                minutes = (now - last_alerted_dt).total_seconds() / 60.0
+                if minutes >= reminder_min:
+                    stuck_reminder = True
+
+            if stuck_reminder:
+                reminders.append((check, old))
+                updated[check.name] = CheckState(
+                    status=check.status,
+                    since=old.since,
+                    last_alerted=now.isoformat(),
+                    detail=check.detail,
+                )
+            else:
+                updated[check.name] = CheckState(
+                    status=check.status,
+                    since=old.since,
+                    last_alerted=old.last_alerted,
+                    detail=check.detail,
+                )
+
+    # Dispatch. Systemic coalescing applies only to same-tick down transitions.
+    if len(down_transitions) >= systemic_threshold:
+        post(webhook_url, render_systemic_alert(down_transitions))
+    else:
+        for check in down_transitions:
+            post(webhook_url, render_alert(
+                check, previous.get(check.name), now=now, kind="down",
+            ))
+
+    for check, old in recoveries:
+        post(webhook_url, render_alert(check, old, now=now, kind="recovered"))
+
+    for check, old in reminders:
+        post(webhook_url, render_alert(check, old, now=now, kind="reminder"))
+
+    return updated
