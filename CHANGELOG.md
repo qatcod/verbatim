@@ -2,6 +2,56 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-07-16
+
+### Added — Watchdog observability
+
+A new cron-driven watchdog detects Verbatim's silent failures and DMs the
+operator via a Slack Incoming Webhook, independent of the daemons being
+monitored. Motivated by the 2026-07-14 supervisord silent-death incident
+that stayed invisible until a user hit the timeout.
+
+Runs every 2 minutes via cron. Probes seven signals:
+- `supervisord` alive (pgrep)
+- Each of the three daemons in RUNNING state (`supervisorctl status`)
+- Slack API reachable (`auth.test` returns ok)
+- Anthropic API not credit-exhausted (specifically catches the 400/402
+  "credit balance is too low" class we hit during the marketing backfill)
+- DB writes freshness — `warn` at 24h silence, `fail` at 48h
+- Watchdog self-witness (canary timestamp in state.json)
+
+State-transition alerting: one alert on ok→fail, one on fail→ok, and a
+"still down" reminder every 30 minutes while stuck. Simultaneous failure
+of ≥5 checks in the same tick coalesces into one "systemic outage"
+alert instead of spamming individual ones.
+
+Alert transport is a Slack Incoming Webhook (not the bot daemon), so when
+Verbatim is broken the alert path is still intact. Configuration lives in
+`.env`:
+
+```
+VERBATIM_WATCHDOG_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
+VERBATIM_WATCHDOG_REMINDER_MIN=30
+VERBATIM_WATCHDOG_SILENCE_HOURS=24
+VERBATIM_WATCHDOG_SILENCE_FAIL_HOURS=48
+```
+
+New CLI: `verbatim watchdog` (run one tick), `verbatim watchdog --dry-run`
+(print what would be sent without POSTing), `verbatim watchdog
+--send-canary` (post a hello message — used once at deploy time to prove
+the wire reaches you).
+
+### Tests
+40 new tests in `tests/test_watchdog.py` cover state I/O, each check, the
+state machine (transitions, reminders, systemic coalescing), alert
+rendering, webhook retry, and end-to-end run_once. Full suite: 511
+passed.
+
+### Why
+Verbatim previously had no path for telling its operator that Verbatim
+itself was broken. The 2026-07-14 incident sat undetected for hours
+because the failure was silent. This closes that class.
+
 ## [0.13.2] — 2026-06-16
 
 ### Changed
