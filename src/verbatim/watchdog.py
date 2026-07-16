@@ -13,6 +13,7 @@ full design.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sqlite3
@@ -20,7 +21,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -513,3 +514,160 @@ def diff_and_alert(
         post(webhook_url, render_alert(check, old, now=now, kind="reminder"))
 
     return updated
+
+
+# ----- config -----
+
+
+@dataclass
+class WatchdogConfig:
+    webhook_url: str
+    reminder_min: int
+    silence_hours: int
+    silence_fail_hours: int
+    bot_token: str | None
+    anthropic_api_key: str | None
+    db_path: Path
+    daemons: list[str] = field(
+        default_factory=lambda: [
+            "verbatim-watch", "verbatim-slack-bot", "verbatim-daily",
+        ],
+    )
+
+
+def load_config_from_env() -> WatchdogConfig:
+    """Read all env vars, apply defaults, and validate. Exit(1) on missing
+    required config."""
+    webhook_url = os.environ.get("VERBATIM_WATCHDOG_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        print(
+            "ERROR: VERBATIM_WATCHDOG_WEBHOOK_URL not set in .env — "
+            "watchdog can't send alerts.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return WatchdogConfig(
+        webhook_url=webhook_url,
+        reminder_min=int(os.environ.get("VERBATIM_WATCHDOG_REMINDER_MIN", "30")),
+        silence_hours=int(os.environ.get("VERBATIM_WATCHDOG_SILENCE_HOURS", "24")),
+        silence_fail_hours=int(
+            os.environ.get("VERBATIM_WATCHDOG_SILENCE_FAIL_HOURS", "48"),
+        ),
+        bot_token=os.environ.get("SLACK_BOT_TOKEN") or None,
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
+        db_path=Path(
+            os.environ.get("VERBATIM_DB_PATH", "/opt/verbatim/state.db"),
+        ),
+    )
+
+
+# ----- orchestrator -----
+
+
+def _prior_canary(state_path: Path) -> str | None:
+    if not state_path.exists():
+        return None
+    try:
+        raw = json.loads(state_path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return raw.get("canary")
+
+
+def run_once(
+    *,
+    config: WatchdogConfig,
+    state_path: Path = STATE_PATH,
+    now: datetime | None = None,
+    post_fn: Callable[..., bool] | None = None,
+) -> dict[str, CheckState]:
+    """Run all checks once, diff against persisted state, dispatch alerts,
+    save new state, return it (for tests)."""
+    now = now or datetime.now(timezone.utc)
+    previous = load_state(state_path)
+    prior_canary = _prior_canary(state_path)
+
+    checks: list[Check] = [
+        safe_check(check_supervisord_alive, name="supervisord"),
+    ]
+    for daemon in config.daemons:
+        checks.append(safe_check(lambda d=daemon: check_daemon(d), name=daemon))
+    if config.bot_token:
+        checks.append(safe_check(
+            lambda: check_slack_api(config.bot_token),  # type: ignore[arg-type]
+            name="slack-api",
+        ))
+    if config.anthropic_api_key:
+        checks.append(safe_check(
+            lambda: check_anthropic_api(config.anthropic_api_key),  # type: ignore[arg-type]
+            name="anthropic-api",
+        ))
+    checks.append(safe_check(
+        lambda: check_db_silence(
+            config.db_path,
+            warn_hours=config.silence_hours,
+            fail_hours=config.silence_fail_hours,
+            now=now,
+        ),
+        name="db-silence",
+    ))
+    checks.append(safe_check(
+        lambda: check_canary_freshness(prior_canary, now=now),
+        name="canary",
+    ))
+
+    updated = diff_and_alert(
+        checks, previous,
+        webhook_url=config.webhook_url,
+        reminder_min=config.reminder_min,
+        now=now,
+        post_fn=post_fn,
+    )
+    save_state(state_path, updated, canary=now.isoformat())
+    return updated
+
+
+# ----- main entry (flock + orchestration) -----
+
+
+def _dry_run_poster(webhook_url: str, payload: dict[str, str], **kwargs) -> bool:
+    print(f"DRY RUN — would POST to {webhook_url}:")
+    print(json.dumps(payload, indent=2))
+    return True
+
+
+def main(*, dry_run: bool = False, send_canary: bool = False) -> int:
+    """CLI entry point. Acquires flock, loads config, runs once. Returns exit code.
+    dry_run: run all checks + print what would be sent, don't POST or save state.
+    send_canary: post a 'hello from watchdog' message and exit — used at deploy time.
+    """
+    config = load_config_from_env()
+
+    if send_canary:
+        ok = post_webhook(
+            config.webhook_url,
+            {"text": f":test_tube: verbatim watchdog canary — {_now_iso()}"},
+        )
+        print("canary sent" if ok else "canary FAILED", file=sys.stderr)
+        return 0 if ok else 1
+
+    # Acquire an advisory lock so overlapping cron ticks don't collide.
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_fh = LOCK_PATH.open("w")
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(
+            f"[{_now_iso()}] watchdog: already running (lock held). exiting.",
+            file=sys.stderr,
+        )
+        return 0
+
+    try:
+        post_fn = _dry_run_poster if dry_run else None
+        run_once(config=config, post_fn=post_fn)
+    finally:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        lock_fh.close()
+
+    return 0

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from verbatim import watchdog
 
@@ -488,3 +489,61 @@ def test_systemic_outage_coalesces_into_one_alert() -> None:
     # 7 fails → 1 systemic alert, not 7 down alerts.
     assert len(poster.calls) == 1
     assert "SYSTEMIC" in poster.calls[0]["text"].upper()
+
+
+# ----- run_once + config -----
+
+
+def test_load_config_missing_webhook_exits(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("VERBATIM_WATCHDOG_WEBHOOK_URL", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        watchdog.load_config_from_env()
+    assert exc.value.code == 1
+    assert "VERBATIM_WATCHDOG_WEBHOOK_URL" in capsys.readouterr().err
+
+
+def test_load_config_uses_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("VERBATIM_WATCHDOG_WEBHOOK_URL", "https://hooks/x")
+    monkeypatch.setenv("VERBATIM_DB_PATH", "/tmp/state.db")
+    monkeypatch.delenv("VERBATIM_WATCHDOG_REMINDER_MIN", raising=False)
+    monkeypatch.delenv("VERBATIM_WATCHDOG_SILENCE_HOURS", raising=False)
+    monkeypatch.delenv("VERBATIM_WATCHDOG_SILENCE_FAIL_HOURS", raising=False)
+    cfg = watchdog.load_config_from_env()
+    assert cfg.webhook_url == "https://hooks/x"
+    assert cfg.reminder_min == 30
+    assert cfg.silence_hours == 24
+    assert cfg.silence_fail_hours == 48
+
+
+def test_run_once_writes_state_and_updates_canary(tmp_path, monkeypatch) -> None:
+    """run_once should always update the canary + save state, even if no checks alert."""
+    state_path = tmp_path / "state.json"
+    db_path = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE entities (id TEXT, created_at TEXT)")
+    conn.commit()
+    conn.close()
+
+    # Mock all subprocess + httpx calls so run_once returns "ok" for everything.
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "RUNNING pid 1"})(),
+    )
+    cfg = watchdog.WatchdogConfig(
+        webhook_url="https://hooks/x",
+        reminder_min=30,
+        silence_hours=24,
+        silence_fail_hours=48,
+        bot_token=None,           # skip slack check
+        anthropic_api_key=None,   # skip anthropic check
+        db_path=db_path,
+        daemons=["verbatim-watch"],
+    )
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    poster = FakePoster()
+    watchdog.run_once(
+        config=cfg, state_path=state_path, now=now, post_fn=poster,
+    )
+    assert state_path.exists()
+    loaded = json.loads(state_path.read_text())
+    assert loaded["canary"] == now.isoformat()
