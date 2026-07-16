@@ -656,7 +656,7 @@ def main(*, dry_run: bool = False, send_canary: bool = False) -> int:
     lock_fh = LOCK_PATH.open("w")
     try:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    except (BlockingIOError, OSError):
         print(
             f"[{_now_iso()}] watchdog: already running (lock held). exiting.",
             file=sys.stderr,
