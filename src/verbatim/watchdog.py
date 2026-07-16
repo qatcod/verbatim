@@ -59,6 +59,15 @@ class CheckState:
     detail: str = ""
 
 
+@dataclass
+class Alert:
+    """A pending alert ready to dispatch after state has been persisted."""
+
+    kind: Literal["down", "recovered", "reminder", "systemic"]
+    checks: list[Check]  # single-element for down/recovered/reminder; multi for systemic
+    previous_states: list[CheckState | None]  # aligned with checks; empty for systemic
+
+
 # ----- state I/O -----
 
 
@@ -121,7 +130,7 @@ def check_supervisord_alive() -> Check:
     """Is supervisord running at all? Uses pgrep, not supervisorctl (which needs
     the supervisord socket)."""
     proc = subprocess.run(
-        ["pgrep", "-x", "supervisord"], capture_output=True, text=True,
+        ["pgrep", "-x", "supervisord"], capture_output=True, text=True, timeout=5,
     )
     if proc.returncode == 0:
         return Check(name="supervisord", status="ok")
@@ -136,7 +145,7 @@ def check_daemon(name: str) -> Check:
     """Is the named supervisord-managed daemon in RUNNING state?"""
     proc = subprocess.run(
         ["supervisorctl", "status", name],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=5,
     )
     output = (proc.stdout or "").strip()
     if "RUNNING" in output:
@@ -417,24 +426,21 @@ def _log_dropped_alert(payload: dict[str, str]) -> None:
 # ----- state machine -----
 
 
-def diff_and_alert(
+def diff_state(
     current: list[Check],
     previous: dict[str, CheckState],
-    webhook_url: str,
-    reminder_min: int,
     *,
-    now: datetime,
+    reminder_min: int,
     systemic_threshold: int = 5,
-    post_fn: Callable[..., bool] | None = None,
-) -> dict[str, CheckState]:
-    """Compare current check results to previous state, dispatch alerts on
-    transitions or stuck-in-fail reminders, and return the updated state dict
-    for save_state to persist. Returns the updated state — does NOT save it.
-    Set post_fn to a fake in tests; defaults to post_webhook.
+    now: datetime,
+) -> tuple[dict[str, CheckState], list[Alert]]:
+    """Pure computation: diff current check results against previous state and
+    return the new state dict plus a list of Alert objects to dispatch.
+    No side effects — no POSTing, no saving.
     """
-    post = post_fn or post_webhook
     updated: dict[str, CheckState] = {}
     down_transitions: list[Check] = []
+    down_previous: list[CheckState | None] = []
     reminders: list[tuple[Check, CheckState]] = []
     recoveries: list[tuple[Check, CheckState]] = []
 
@@ -445,6 +451,7 @@ def diff_and_alert(
             # to permit systemic coalescing on boot.
             if check.status == "fail":
                 down_transitions.append(check)
+                down_previous.append(None)
             updated[check.name] = CheckState(
                 status=check.status,
                 since=now.isoformat(),
@@ -457,6 +464,7 @@ def diff_and_alert(
         if transitioned:
             if check.status == "fail":
                 down_transitions.append(check)
+                down_previous.append(old)
             elif old.status == "fail" and check.status == "ok":
                 recoveries.append((check, old))
             # warn transitions (ok→warn, warn→ok, warn→warn) don't alert here.
@@ -498,21 +506,67 @@ def diff_and_alert(
                     detail=check.detail,
                 )
 
-    # Dispatch. Systemic coalescing applies only to same-tick down transitions.
+    # Build alert list. Systemic coalescing applies only to same-tick down transitions.
+    alerts: list[Alert] = []
     if len(down_transitions) >= systemic_threshold:
-        post(webhook_url, render_systemic_alert(down_transitions))
+        alerts.append(Alert(kind="systemic", checks=list(down_transitions), previous_states=[]))
     else:
-        for check in down_transitions:
-            post(webhook_url, render_alert(
-                check, previous.get(check.name), now=now, kind="down",
-            ))
+        for check, prev_state in zip(down_transitions, down_previous, strict=True):
+            alerts.append(Alert(kind="down", checks=[check], previous_states=[prev_state]))
 
     for check, old in recoveries:
-        post(webhook_url, render_alert(check, old, now=now, kind="recovered"))
+        alerts.append(Alert(kind="recovered", checks=[check], previous_states=[old]))
 
     for check, old in reminders:
-        post(webhook_url, render_alert(check, old, now=now, kind="reminder"))
+        alerts.append(Alert(kind="reminder", checks=[check], previous_states=[old]))
 
+    return updated, alerts
+
+
+def _dispatch_alerts(
+    alerts: list[Alert],
+    webhook_url: str,
+    *,
+    now: datetime,
+    post_fn: Callable[..., bool],
+) -> None:
+    """Send a list of Alert objects via post_fn. Called only after state is saved."""
+    for alert in alerts:
+        if alert.kind == "systemic":
+            post_fn(webhook_url, render_systemic_alert(alert.checks))
+        else:
+            check = alert.checks[0]
+            prev_state = alert.previous_states[0] if alert.previous_states else None
+            post_fn(
+                webhook_url,
+                render_alert(check, prev_state, now=now, kind=alert.kind),  # type: ignore[arg-type]
+            )
+
+
+def diff_and_alert(
+    current: list[Check],
+    previous: dict[str, CheckState],
+    webhook_url: str,
+    reminder_min: int,
+    *,
+    now: datetime,
+    systemic_threshold: int = 5,
+    post_fn: Callable[..., bool] | None = None,
+) -> dict[str, CheckState]:
+    """Backward-compat wrapper: compute new state + alerts, dispatch immediately.
+
+    Existing callers (and all tests) continue to work unchanged. For the
+    production path, use diff_state + save_state + _dispatch_alerts instead so
+    that alerts are only sent after state has been successfully persisted.
+    """
+    post = post_fn or post_webhook
+    updated, alerts = diff_state(
+        current, previous,
+        reminder_min=reminder_min,
+        systemic_threshold=systemic_threshold,
+        now=now,
+    )
+    _dispatch_alerts(alerts, webhook_url, now=now, post_fn=post)
     return updated
 
 
@@ -616,14 +670,22 @@ def run_once(
         name="canary",
     ))
 
-    updated = diff_and_alert(
+    post = post_fn or post_webhook
+    updated, alerts = diff_state(
         checks, previous,
-        webhook_url=config.webhook_url,
         reminder_min=config.reminder_min,
         now=now,
-        post_fn=post_fn,
     )
-    save_state(state_path, updated, canary=now.isoformat())
+    try:
+        save_state(state_path, updated, canary=now.isoformat())
+    except OSError as e:
+        print(
+            f"[watchdog] save_state failed, suppressing alerts: {e}",
+            file=sys.stderr,
+        )
+        return previous  # unchanged; next tick will retry with same previous state
+    # State persisted — safe to dispatch alerts now.
+    _dispatch_alerts(alerts, config.webhook_url, now=now, post_fn=post)
     return updated
 
 

@@ -549,6 +549,68 @@ def test_run_once_writes_state_and_updates_canary(tmp_path, monkeypatch) -> None
     assert loaded["canary"] == now.isoformat()
 
 
+def test_run_once_suppresses_alerts_on_save_state_failure(
+    tmp_path: Path, capsys,
+) -> None:
+    """If save_state raises OSError, no alerts should fire and the returned
+    state must equal the previous (unchanged) state so the next tick retries."""
+    import sqlite3
+
+    state_path = tmp_path / "state.json"
+    db_path = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE entities (id TEXT, created_at TEXT)")
+    conn.commit()
+    conn.close()
+
+    # Seed previous state: one check currently ok.
+    now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+    previous_state = {
+        "supervisord": watchdog.CheckState(
+            status="ok",
+            since=(now - timedelta(minutes=10)).isoformat(),
+            last_alerted=None,
+            detail="",
+        ),
+    }
+    # Write initial state so load_state picks it up.
+    watchdog.save_state(state_path, previous_state, canary=(now - timedelta(minutes=2)).isoformat())
+
+    poster = FakePoster()
+
+    # Patch subprocess so supervisord appears as fail (a transition that would fire an alert).
+    with (
+        patch("subprocess.run") as mock_run,
+        patch.object(watchdog, "save_state", side_effect=OSError("disk full")),
+    ):
+        mock_run.return_value.returncode = 1  # supervisord not found → fail
+        mock_run.return_value.stdout = ""
+
+        cfg = watchdog.WatchdogConfig(
+            webhook_url="https://hooks/x",
+            reminder_min=30,
+            silence_hours=24,
+            silence_fail_hours=48,
+            bot_token=None,
+            anthropic_api_key=None,
+            db_path=db_path,
+            daemons=[],
+        )
+        returned = watchdog.run_once(
+            config=cfg, state_path=state_path, now=now, post_fn=poster,
+        )
+
+    # (a) No alerts should have been dispatched.
+    assert poster.calls == [], "Expected no alerts when save_state fails"
+
+    # (b) A stderr line should have been emitted mentioning save_state.
+    err = capsys.readouterr().err
+    assert "save_state failed" in err
+
+    # (c) Returned state must equal the previous state (not the new computed one).
+    assert returned == previous_state
+
+
 # ----- CLI tests -----
 
 
