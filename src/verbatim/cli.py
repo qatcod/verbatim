@@ -1473,6 +1473,30 @@ def version() -> None:
     console.print(f"verbatim {__version__}")
 
 
+@app.command(name="watchdog")
+def watchdog_cmd(
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Run all checks + print what would be alerted, but don't POST or save state.",
+    ),
+    send_canary: bool = typer.Option(
+        False, "--send-canary",
+        help="Post a 'hello from watchdog' message to the webhook and exit. "
+             "Use at deploy time to verify the wire actually reaches you.",
+    ),
+) -> None:
+    """Run one health-check tick — alerts on daemon deaths, service failures,
+    and data-flow silence via a Slack Incoming Webhook.
+
+    Designed to be invoked by cron every 2 minutes. Independent of the
+    supervisord-managed daemons it monitors.
+    """
+    from . import watchdog as watchdog_lib
+    raise typer.Exit(code=watchdog_lib.main(
+        dry_run=dry_run, send_canary=send_canary,
+    ))
+
+
 # ----------------------- init (first-run wizard) -----------------------
 
 

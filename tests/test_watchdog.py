@@ -547,3 +547,117 @@ def test_run_once_writes_state_and_updates_canary(tmp_path, monkeypatch) -> None
     assert state_path.exists()
     loaded = json.loads(state_path.read_text())
     assert loaded["canary"] == now.isoformat()
+
+
+# ----- CLI tests -----
+
+
+def test_watchdog_cmd_help() -> None:
+    """The 'verbatim watchdog --help' command should show usage."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog", "--help"])
+    assert r.exit_code == 0
+    assert "--dry-run" in r.stdout
+    assert "--send-canary" in r.stdout
+
+
+def test_watchdog_cmd_calls_main_with_flags(monkeypatch, tmp_path: Path) -> None:
+    """The CLI command should call watchdog.main() with the correct flags."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    # Track calls to main()
+    calls: list[dict] = []
+
+    def fake_main(*, dry_run: bool, send_canary: bool) -> int:
+        calls.append({"dry_run": dry_run, "send_canary": send_canary})
+        return 0
+
+    monkeypatch.setattr("verbatim.watchdog.main", fake_main)
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog"])
+    assert r.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0] == {"dry_run": False, "send_canary": False}
+
+
+def test_watchdog_cmd_passes_dry_run_flag(monkeypatch) -> None:
+    """The --dry-run flag should propagate to watchdog.main()."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    calls: list[dict] = []
+
+    def fake_main(*, dry_run: bool, send_canary: bool) -> int:
+        calls.append({"dry_run": dry_run, "send_canary": send_canary})
+        return 0
+
+    monkeypatch.setattr("verbatim.watchdog.main", fake_main)
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog", "--dry-run"])
+    assert r.exit_code == 0
+    assert calls[0] == {"dry_run": True, "send_canary": False}
+
+
+def test_watchdog_cmd_passes_send_canary_flag(monkeypatch) -> None:
+    """The --send-canary flag should propagate to watchdog.main()."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    calls: list[dict] = []
+
+    def fake_main(*, dry_run: bool, send_canary: bool) -> int:
+        calls.append({"dry_run": dry_run, "send_canary": send_canary})
+        return 0
+
+    monkeypatch.setattr("verbatim.watchdog.main", fake_main)
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog", "--send-canary"])
+    assert r.exit_code == 0
+    assert calls[0] == {"dry_run": False, "send_canary": True}
+
+
+def test_watchdog_cmd_combines_both_flags(monkeypatch) -> None:
+    """Both --dry-run and --send-canary can be passed together."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    calls: list[dict] = []
+
+    def fake_main(*, dry_run: bool, send_canary: bool) -> int:
+        calls.append({"dry_run": dry_run, "send_canary": send_canary})
+        return 0
+
+    monkeypatch.setattr("verbatim.watchdog.main", fake_main)
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog", "--dry-run", "--send-canary"])
+    assert r.exit_code == 0
+    assert calls[0] == {"dry_run": True, "send_canary": True}
+
+
+def test_watchdog_cmd_propagates_return_code(monkeypatch) -> None:
+    """The CLI command should exit with the code returned by watchdog.main()."""
+    from typer.testing import CliRunner
+
+    from verbatim.cli import app
+
+    def fake_main(*, dry_run: bool, send_canary: bool) -> int:
+        return 42
+
+    monkeypatch.setattr("verbatim.watchdog.main", fake_main)
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["watchdog"])
+    assert r.exit_code == 42
