@@ -34,7 +34,8 @@ src/verbatim/
 ├── renderers.py       # JSON + Markdown output.
 ├── store.py           # SQLite layer (schema, raw CRUD).
 ├── state.py           # Domain operations on top of store.
-├── mcp_server.py      # MCP stdio server for agent clients.
+├── mcp_server.py      # MCP server: tool definitions + dispatch, stdio transport (default).
+├── mcp_http.py        # MCP HTTP transport (--transport http): token-gated, same tools/server.
 └── cli.py             # Typer CLI: extract, ingest, query, resolve.
 
 tests/
@@ -74,8 +75,13 @@ Projections push state out to existing tools (Linear, GitHub Issues, etc.). The 
 If you want to expose a new tool to agent clients:
 
 1. Add a `types.Tool(...)` entry in `mcp_server._list_tools()` with a clear description and JSON Schema.
-2. Add a dispatch branch in `mcp_server._call_tool()` that calls into `state.py`.
-3. Return `[types.TextContent(...)]` with a human-readable rendering of the result — agents read these like a human would.
+2. Add a dispatch branch in `mcp_server._dispatch_tool()` that calls into `state.py` — it runs inside
+   `_call_tool()`'s try/except, so a raised exception becomes a tool-level error result automatically;
+   don't catch it yourself unless you want a more specific message.
+3. Return a `str` with a human-readable rendering of the result — agents read these like a human
+   would. It's wrapped in `[types.TextContent(...)]` for you.
+4. This tool is served over both transports automatically: stdio and HTTP (`--transport http`) run
+   the exact same `Server` instance.
 
 ## Style
 
