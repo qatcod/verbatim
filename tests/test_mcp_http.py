@@ -1,4 +1,7 @@
 import asyncio
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import httpx2
 import pytest
@@ -6,6 +9,7 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.testclient import TestClient
 
+from verbatim import state
 from verbatim.mcp_http import build_app, require_token
 
 # `build_app` lazily imports the real `server` from `verbatim.mcp_server` (see mcp_http.py) so that
@@ -75,41 +79,131 @@ def test_wrong_token_is_refused():
     assert r.status_code == 401
 
 
-def test_real_tool_call_through_the_transport():
-    """A real MCP round trip over HTTP: initialize, then tools/list, through the SAME Starlette
-    app `build_app` returns -- not a stand-in, not a direct call into the manager.
+# The seven tools mcp_server registers, in order. Asserted by equality, not membership: a
+# membership check (`"list_commitments" in tool_names`) stays green while six of the seven
+# silently disappear, which is not a property worth asserting.
+_EXPECTED_TOOLS = [
+    "list_commitments",
+    "list_decisions",
+    "list_open_questions",
+    "list_blockers",
+    "recent_sessions",
+    "verbatim_stats",
+    "resolve_entity",
+]
 
-    This is the test the brief's 401-only suite was missing. `StreamableHTTPSessionManager.run()`
-    is a required lifecycle context manager (its own docstring: "this creates and manages the task
-    group for all session operations"); `manager.handle_request` raises `RuntimeError` without it.
-    A suite that only exercises the 401 paths never calls `handle_request` on a real request and so
-    never discovers that -- exactly the gap this test closes.
 
-    Uses the mcp SDK's own streamable-http client against the app's ASGI callable via
-    `httpx2.ASGITransport` (in-process, no real socket), with the app's lifespan entered explicitly
-    via `app.router.lifespan_context` -- the same lifespan `build_app` wires up for a real server,
-    just invoked directly instead of through a running event loop's startup/shutdown messages
-    (Starlette's `TestClient` only sends those inside a `with TestClient(app) as client:` block, and
-    the mcp client needs an async httpx2 client, not TestClient's sync one).
+@asynccontextmanager
+async def _mcp_session(token: str = "s3cret") -> AsyncIterator[ClientSession]:
+    """An initialised MCP client session speaking to the app `build_app` returns.
+
+    Not a stand-in and not a direct call into the manager: the real Starlette app, driven by the mcp
+    SDK's own streamable-http client over `httpx2.ASGITransport` (in-process, no real socket).
+
+    The app's lifespan is entered explicitly via `app.router.lifespan_context`, because
+    `StreamableHTTPSessionManager.run()` is a required lifecycle context manager -- its own docstring
+    says it "creates and manages the task group for all session operations", and
+    `manager.handle_request` raises `RuntimeError: Task group is not initialized` without it. A suite
+    that only exercises the 401 paths never calls `handle_request` on a request that gets past auth,
+    so it never discovers that. Starlette's `TestClient` would send the startup/shutdown messages
+    only inside a `with TestClient(app)` block, and the mcp client needs an async httpx2 client
+    rather than TestClient's sync one -- hence invoking the same lifespan directly.
     """
+    app = build_app(token)
+    async with app.router.lifespan_context(app):
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as http_client:
+            async with streamable_http_client("http://testserver/mcp", http_client=http_client) as (
+                read,
+                write,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    yield session
+
+
+def _seed_db(tmp_db_path, extraction, diagnostics, monkeypatch) -> None:
+    """Point the tools at a throwaway DB holding one extraction.
+
+    Setting `$VERBATIM_DB_PATH` is load-bearing, not tidiness: `mcp_server._call_tool` calls
+    `state.open_db()` with no argument, which resolves that variable and otherwise falls back to the
+    developer's real `~/.verbatim/state.db`. Same idiom as tests/test_store.py.
+
+    Seeded rather than left empty on purpose. An all-zeros stats payload is also what a tool that
+    reaches no database at all would produce, so an empty DB cannot distinguish a working tool from a
+    silent one. The counts below are what conftest's `sample_extraction` contains.
+    """
+    monkeypatch.setenv("VERBATIM_DB_PATH", str(tmp_db_path))
+    conn = state.open_db(tmp_db_path)
+    try:
+        state.save_extraction(conn, extraction, diagnostics, source_path="meeting.txt")
+    finally:
+        conn.close()
+
+
+def test_tools_list_returns_exactly_the_seven_tools():
+    """A real MCP round trip over HTTP: initialize, then tools/list."""
 
     async def round_trip() -> list[str]:
-        app = build_app("s3cret")
-        async with app.router.lifespan_context(app):
-            transport = httpx2.ASGITransport(app=app)
-            async with httpx2.AsyncClient(
-                transport=transport,
-                base_url="http://testserver",
-                headers={"Authorization": "Bearer s3cret"},
-            ) as http_client:
-                async with streamable_http_client("http://testserver/mcp", http_client=http_client) as (
-                    read,
-                    write,
-                ):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        result = await session.list_tools()
-                        return [t.name for t in result.tools]
+        async with _mcp_session() as session:
+            result = await session.list_tools()
+            return [t.name for t in result.tools]
 
-    tool_names = asyncio.run(round_trip())
-    assert "list_commitments" in tool_names
+    assert asyncio.run(round_trip()) == _EXPECTED_TOOLS
+
+
+def test_tool_call_returns_that_tools_own_content(
+    tmp_db_path, sample_extraction, sample_diagnostics, monkeypatch
+):
+    """tools/call, not just tools/list -- and asserted on the content, not on a response arriving.
+
+    `verbatim_stats` because its output is `json.dumps` of the stats row: an exact, parseable
+    assertion with no coupling to prose formatting. The numbers are the ones conftest's
+    `sample_extraction` seeds, so they are specific to this tool having actually run its SQL against
+    the seeded database -- the point a `tools/list`-only suite misses entirely, since
+    `tools/list` keeps working with `on_call_tool=` unregistered.
+    """
+    _seed_db(tmp_db_path, sample_extraction, sample_diagnostics, monkeypatch)
+
+    async def round_trip():
+        async with _mcp_session() as session:
+            return await session.call_tool("verbatim_stats", {})
+
+    result = asyncio.run(round_trip())
+
+    assert result.is_error is False
+    stats = json.loads(result.content[0].text)
+    assert stats["sessions"] == 1
+    assert stats["commitments_open"] == 2
+    assert stats["decisions_open"] == 1
+    assert stats["open_questions_open"] == 1
+    assert stats["blockers_open"] == 1
+
+
+def test_tool_call_arguments_reach_the_query(
+    tmp_db_path, sample_extraction, sample_diagnostics, monkeypatch
+):
+    """Arguments have to survive the transport, not just the tool name.
+
+    `sample_extraction` holds two open commitments -- Alice's at high confidence, Carol's at medium.
+    `min_confidence: "high"` must therefore return Alice's and not Carol's: a result that is wrong
+    in both directions if the argument is dropped (two commitments) or the filter misapplied (none).
+    Also asserts the verbatim quote comes back, since quote-sourcing is the guarantee the tool
+    exists to provide. Entity ids are uuids, so they are deliberately not asserted on.
+    """
+    _seed_db(tmp_db_path, sample_extraction, sample_diagnostics, monkeypatch)
+
+    async def round_trip():
+        async with _mcp_session() as session:
+            return await session.call_tool("list_commitments", {"min_confidence": "high", "limit": 50})
+
+    text = asyncio.run(round_trip()).content[0].text
+
+    assert "1 commitment(s):" in text
+    assert "**Alice** — v0 of Verbatim CLI by EOD Wednesday" in text
+    assert "I'll have a working version by end of day Wednesday." in text
+    assert "Carol" not in text
