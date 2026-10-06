@@ -9,29 +9,14 @@ from starlette.testclient import TestClient
 from verbatim.mcp_http import build_app, require_token
 
 # `build_app` lazily imports the real `server` from `verbatim.mcp_server` (see mcp_http.py) so that
-# `require_token` stays importable and testable on its own. That module's tool registration uses the
-# decorator API (`@server.list_tools()`, `@server.call_tool()`), which the installed mcp==2.3.0's
-# `Server` dropped in favour of constructor-time `on_list_tools=`/`on_call_tool=` callables (its own
-# deprecation notice dates the change to 2026-07-28, SEP-2577). Importing `verbatim.mcp_server` on its
-# own, with zero HTTP code involved, reproduces the identical `AttributeError: 'Server' object has no
-# attribute 'list_tools'` -- confirming this is pre-existing in mcp_server.py and unrelated to the
-# transport built here. mcp_server.py is out of this module's file boundary to fix, so every test
-# below that calls `build_app` with a non-empty token is marked `xfail(strict=True)` against it: a
-# fix to mcp_server.py's tool registration should flip these to unexpected passes, which `strict=True`
-# turns into a failure as a reminder to remove the marker. `build_app`'s own mechanics (lifespan/
-# `run()`, the auth gate, a real `tools/list` round trip) were separately verified against a
-# stand-in `Server` built with the current constructor API, by pre-seeding
-# `sys.modules["verbatim.mcp_server"]` before import -- never touching mcp_server.py on disk. See the
-# task-2 report for that verification, including mutating away the lifespan's `manager.run()` (the
-# round trip then fails with the exact `RuntimeError: Task group is not initialized. Make sure to use
-# run().` Task 1 predicted) and mutating away the auth check (the request then reaches the manager
-# without a task group and errors, which still fails the 401 assertion).
-_BLOCKED_BY_MCP_SERVER_DECORATOR_API = (
-    "blocked by a pre-existing defect in verbatim/mcp_server.py (out of this module's file "
-    "boundary): its @server.list_tools()/@server.call_tool() decorators raise AttributeError "
-    "against the installed mcp==2.3.0, which replaced them with on_list_tools=/on_call_tool= "
-    "constructor kwargs. Reproduces with `import verbatim.mcp_server` alone, no HTTP involved."
-)
+# `require_token` stays importable and testable on its own. That import used to raise
+# `AttributeError: 'Server' object has no attribute 'list_tools'`: mcp_server.py registered its tools
+# with the 1.x `@server.list_tools()`/`@server.call_tool()` decorators, which mcp 2.0 removed in
+# favour of `on_list_tools=`/`on_call_tool=` constructor kwargs (SEP-2577, 2026-07-28), and
+# `pyproject.toml` admitted 2.x via an uncapped `mcp>=1.0.0`. The three tests below were
+# `xfail(strict=True)` against that defect. mcp_server.py has since been migrated to the constructor
+# API and the dependency capped at `mcp>=2.3.0,<3`, so they run for real -- a full MCP round trip
+# through the app `build_app` returns, against the same `Server` instance the stdio path serves.
 
 
 # ----------------------- require_token: pure-function auth -----------------------
@@ -72,7 +57,6 @@ def test_refuses_to_build_without_a_token():
         build_app("")
 
 
-@pytest.mark.xfail(strict=True, reason=_BLOCKED_BY_MCP_SERVER_DECORATOR_API)
 def test_unauthenticated_request_is_refused():
     # An HTTP listener has no header at all here -- no Authorization, no X-Api-Key.
     client = TestClient(build_app("s3cret"))
@@ -80,7 +64,6 @@ def test_unauthenticated_request_is_refused():
     assert r.status_code == 401
 
 
-@pytest.mark.xfail(strict=True, reason=_BLOCKED_BY_MCP_SERVER_DECORATOR_API)
 def test_wrong_token_is_refused():
     # Same length as "s3cret" (6 chars) -- a length-only comparison would let this through.
     client = TestClient(build_app("s3cret"))
@@ -92,7 +75,6 @@ def test_wrong_token_is_refused():
     assert r.status_code == 401
 
 
-@pytest.mark.xfail(strict=True, reason=_BLOCKED_BY_MCP_SERVER_DECORATOR_API)
 def test_real_tool_call_through_the_transport():
     """A real MCP round trip over HTTP: initialize, then tools/list, through the SAME Starlette
     app `build_app` returns -- not a stand-in, not a direct call into the manager.
