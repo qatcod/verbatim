@@ -11,6 +11,7 @@ from starlette.testclient import TestClient
 
 from verbatim import state
 from verbatim.mcp_http import build_app, require_token
+from verbatim.mcp_server import parse_transport_args
 
 # `build_app` lazily imports the real `server` from `verbatim.mcp_server` (see mcp_http.py) so that
 # `require_token` stays importable and testable on its own. That import used to raise
@@ -207,3 +208,23 @@ def test_tool_call_arguments_reach_the_query(
     assert "**Alice** — v0 of Verbatim CLI by EOD Wednesday" in text
     assert "I'll have a working version by end of day Wednesday." in text
     assert "Carol" not in text
+
+
+# ----------------------- parse_transport_args: the entry point's transport switch -----------------------
+#
+# The important assertion is the one about the DEFAULT. Claude Code and Cursor invoke `verbatim-mcp`
+# with no arguments today, and this task must not change what that does.
+
+
+def test_default_is_stdio_so_existing_clients_are_untouched():
+    assert parse_transport_args([]).transport == "stdio"
+
+
+def test_http_is_opt_in():
+    args = parse_transport_args(["--transport", "http", "--port", "9001"])
+    assert args.transport == "http"
+    assert args.port == 9001
+
+
+def test_http_port_has_a_default():
+    assert parse_transport_args(["--transport", "http"]).port == 8081

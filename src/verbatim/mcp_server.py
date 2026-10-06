@@ -15,8 +15,10 @@ Tools exposed:
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
+import os
 from typing import Any
 
 import mcp.types as types
@@ -306,8 +308,33 @@ async def _run() -> None:
         )
 
 
+def parse_transport_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Transport selection for `verbatim-mcp`.
+
+    stdio is the DEFAULT and must stay so: Claude Code and Cursor already invoke this with no
+    arguments, and changing that would break every existing configuration silently.
+    """
+    p = argparse.ArgumentParser(prog="verbatim-mcp")
+    p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    p.add_argument("--port", type=int, default=8081)
+    p.add_argument("--host", default="0.0.0.0")
+    return p.parse_args(argv)
+
+
 def main() -> None:  # console script entry point
-    asyncio.run(_run())
+    args = parse_transport_args()
+    if args.transport == "stdio":
+        asyncio.run(_run())
+        return
+
+    import uvicorn
+
+    from .mcp_http import build_app
+
+    token = os.environ.get("VERBATIM_MCP_TOKEN", "")
+    # build_app raises on an empty token. Let it: a service that serves a team's state anonymously
+    # because an env var was unset is worse than one that refuses to start and says why.
+    uvicorn.run(build_app(token), host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":  # pragma: no cover
