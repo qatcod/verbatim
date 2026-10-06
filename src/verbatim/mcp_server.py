@@ -161,57 +161,73 @@ async def _call_tool(
     args = params.arguments or {}
     conn = state.open_db()
     try:
-        if name == "list_commitments":
-            items = state.list_commitments(
-                conn,
-                actor=args.get("actor"),
-                min_confidence=args.get("min_confidence"),
-                status=None if args.get("include_resolved") else "open",
-                limit=int(args.get("limit", 50)),
-            )
-            text = _format_entities(items, kind="commitment")
-        elif name == "list_decisions":
-            items = state.list_decisions(
-                conn,
-                min_confidence=args.get("min_confidence"),
-                status=None if args.get("include_resolved") else "open",
-                limit=int(args.get("limit", 50)),
-            )
-            text = _format_entities(items, kind="decision")
-        elif name == "list_open_questions":
-            items = state.list_open_questions(
-                conn,
-                raised_by=args.get("raised_by"),
-                min_confidence=args.get("min_confidence"),
-                limit=int(args.get("limit", 50)),
-            )
-            text = _format_entities(items, kind="open_question")
-        elif name == "list_blockers":
-            items = state.list_blockers(
-                conn,
-                owner=args.get("owner"),
-                min_confidence=args.get("min_confidence"),
-                limit=int(args.get("limit", 50)),
-            )
-            text = _format_entities(items, kind="blocker")
-        elif name == "recent_sessions":
-            sessions = state.recent_sessions(conn, limit=int(args.get("limit", 20)))
-            text = _format_sessions(sessions)
-        elif name == "verbatim_stats":
-            s = state.stats(conn)
-            text = json.dumps(s, indent=2)
-        elif name == "resolve_entity":
-            full_id = _resolve_prefix(conn, args["entity_id"])
-            if full_id is None:
-                text = f"No entity matched id prefix '{args['entity_id']}'."
-            else:
-                ok = state.resolve_entity(conn, full_id)
-                text = f"Resolved {full_id}." if ok else f"No change for {full_id}."
-        else:
-            text = f"Unknown tool: {name}"
+        text = _dispatch_tool(conn, name, args)
+    except Exception as exc:
+        # mcp 1.x's @server.call_tool() decorator caught handler exceptions and returned them as
+        # CallToolResult(isError=True, ...) -- a tool-level error the *model* gets to see and can
+        # recover from (retry with different arguments, tell the user what's wrong). mcp 2.x's
+        # on_call_tool= constructor kwarg does none of that: an uncaught exception here becomes an
+        # MCPError the *client* raises instead, which a caller like `resolve_entity {}` (missing
+        # the required entity_id) turns into a hard failure instead of a message the model could
+        # act on. Restore the 1.x behaviour explicitly rather than depend on mcp to do it.
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Error calling tool '{name}': {exc}")],
+            isError=True,
+        )
     finally:
         conn.close()
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+
+def _dispatch_tool(conn, name: str, args: dict[str, Any]) -> str:
+    """The actual per-tool branch, split out so `_call_tool` can wrap all of it in one try/except."""
+    if name == "list_commitments":
+        items = state.list_commitments(
+            conn,
+            actor=args.get("actor"),
+            min_confidence=args.get("min_confidence"),
+            status=None if args.get("include_resolved") else "open",
+            limit=int(args.get("limit", 50)),
+        )
+        return _format_entities(items, kind="commitment")
+    elif name == "list_decisions":
+        items = state.list_decisions(
+            conn,
+            min_confidence=args.get("min_confidence"),
+            status=None if args.get("include_resolved") else "open",
+            limit=int(args.get("limit", 50)),
+        )
+        return _format_entities(items, kind="decision")
+    elif name == "list_open_questions":
+        items = state.list_open_questions(
+            conn,
+            raised_by=args.get("raised_by"),
+            min_confidence=args.get("min_confidence"),
+            limit=int(args.get("limit", 50)),
+        )
+        return _format_entities(items, kind="open_question")
+    elif name == "list_blockers":
+        items = state.list_blockers(
+            conn,
+            owner=args.get("owner"),
+            min_confidence=args.get("min_confidence"),
+            limit=int(args.get("limit", 50)),
+        )
+        return _format_entities(items, kind="blocker")
+    elif name == "recent_sessions":
+        sessions = state.recent_sessions(conn, limit=int(args.get("limit", 20)))
+        return _format_sessions(sessions)
+    elif name == "verbatim_stats":
+        s = state.stats(conn)
+        return json.dumps(s, indent=2)
+    elif name == "resolve_entity":
+        full_id = _resolve_prefix(conn, args["entity_id"])
+        if full_id is None:
+            return f"No entity matched id prefix '{args['entity_id']}'."
+        ok = state.resolve_entity(conn, full_id)
+        return f"Resolved {full_id}." if ok else f"No change for {full_id}."
+    else:
+        return f"Unknown tool: {name}"
 
 
 # ----------------------- server instance -----------------------
@@ -317,7 +333,10 @@ def parse_transport_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="verbatim-mcp")
     p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
     p.add_argument("--port", type=int, default=8081)
-    p.add_argument("--host", default="0.0.0.0")
+    # Local-only by default: someone running `verbatim-mcp --transport http` on a laptop to try it
+    # out should not bind the LAN by default. Binding every interface is the Dockerfile's job, not
+    # this default's -- the Dockerfile CMD passes --host 0.0.0.0 explicitly, where that is the point.
+    p.add_argument("--host", default="127.0.0.1")
     return p.parse_args(argv)
 
 

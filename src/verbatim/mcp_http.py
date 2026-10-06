@@ -25,10 +25,18 @@ def require_token(expected: str, presented: str | None) -> bool:
     Constant-time comparison because this gates network access to a team's extracted state. And an
     EMPTY `expected` denies everything: an unset token must mean the service refuses, never that it
     serves anonymously. That is the direction this gets wrong when it gets wrong.
+
+    Both sides are encoded to UTF-8 bytes before comparison. `hmac.compare_digest` on two `str`
+    raises `TypeError: comparing strings with non-ASCII characters is not supported` the moment
+    either one has a non-ASCII character -- and Starlette decodes request headers as latin-1, so
+    `Authorization: Bearer <anything with a high byte>` from an unauthenticated caller reaches this
+    function with exactly that kind of `str`. Raising here means the ASGI app raises, which is an
+    unhandled 500 (with a traceback an unauthenticated caller does not get to see) instead of the
+    401 a bad credential should produce. Bytes compare fine regardless of their contents.
     """
     if not expected or presented is None:
         return False
-    return hmac.compare_digest(expected, presented)
+    return hmac.compare_digest(expected.encode("utf-8"), presented.encode("utf-8"))
 
 
 def _presented(headers: Headers) -> str | None:

@@ -8,7 +8,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.14.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), GitHub PR discussions, and Google / Outlook calendar events. Local SQLite state graph with cross-session reconciliation. Proactive layer — deadline tracking (overdue / due-soon + Slack nudges), staleness detection, auto-standup, contradiction detection. Web UI with per-person aggregated views, Slack bot with interactive HITL (Confirm / Dismiss / Edit modal / Reassign picker) and a full audit trail, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent — stdio by default, or `--transport http` for network clients, token-gated. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Natural-language `ask` over state, plus plain-language `simplify` for non-technical readers. Typed entity relationships with a visual graph view. Cost guardrails (per-model budget, dry-run, daily caps). 532 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
+**Status:** v0.14.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), GitHub PR discussions, and Google / Outlook calendar events. Local SQLite state graph with cross-session reconciliation. Proactive layer — deadline tracking (overdue / due-soon + Slack nudges), staleness detection, auto-standup, contradiction detection. Web UI with per-person aggregated views, Slack bot with interactive HITL (Confirm / Dismiss / Edit modal / Reassign picker) and a full audit trail, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent — stdio by default, or `--transport http` for network clients, token-gated. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Natural-language `ask` over state, plus plain-language `simplify` for non-technical readers. Typed entity relationships with a visual graph view. Cost guardrails (per-model budget, dry-run, daily caps). 538 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
 
 ---
 
@@ -329,10 +329,16 @@ authenticate with either `Authorization: Bearer <token>` or `X-API-Key: <token>`
 endpoint (unauthenticated) reports `{"status": "ok", ...}` once the server is up; the tools
 themselves are served over `POST /mcp` (Streamable HTTP).
 
+`--host` defaults to `127.0.0.1` — the command above is reachable at `localhost:8081` only, not
+your LAN, even with `--transport http`. Pass `--host 0.0.0.0` explicitly if you actually want it
+reachable from other machines (the Docker image does this for you — see below, since a container
+needs exactly that).
+
 ### Running the HTTP MCP server via Docker
 
-The `Dockerfile` in this repo builds an image whose default command serves MCP over HTTP — a
-container is only reachable over the network, so HTTP (not stdio) is the sensible default here:
+The `Dockerfile` in this repo builds an image whose default command serves MCP over HTTP, bound to
+`0.0.0.0` — a container is only reachable over the network in the first place, so HTTP on every
+interface (not stdio, not loopback-only) is the sensible default here:
 
 ```bash
 docker build -t verbatim-ai .

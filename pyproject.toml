@@ -45,6 +45,11 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",
+    # tests/test_mcp_http.py imports httpx2 directly: mcp 2.x's streamable_http_client types its
+    # http_client param as httpx2.AsyncClient specifically (not httpx.AsyncClient), so the test
+    # needs the real thing, not just whatever mcp/anthropic happen to pull in transitively. Floor
+    # matches mcp 2.3.0's own "Requires-Dist: httpx2>=2.10.0".
+    "httpx2>=2.10.0",
 ]
 
 [project.scripts]

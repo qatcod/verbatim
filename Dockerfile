@@ -60,7 +60,12 @@ EXPOSE 8081
 # default because Claude Code and Cursor already invoke it with no arguments. That asymmetry is
 # deliberate on both sides; do not "fix" it into agreement.
 #
+# --host 0.0.0.0 is explicit and deliberate here too: `verbatim-mcp`'s own --host default is
+# 127.0.0.1 (binding only loopback, so a laptop try-it-out run doesn't open the LAN by surprise),
+# which inside a container means unreachable from outside it -- the opposite failure from the
+# CLI's. A container needs every interface; that is the one thing containers are for.
+#
 # verbatim-mcp refuses to start without VERBATIM_MCP_TOKEN set (see mcp_server.main /
 # mcp_http.build_app) -- an unconfigured container fails loudly on boot instead of serving a
 # team's extracted state anonymously. Pass -e VERBATIM_MCP_TOKEN=<token> at `docker run`.
-CMD ["verbatim-mcp", "--transport", "http", "--port", "8081"]
+CMD ["verbatim-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8081"]
