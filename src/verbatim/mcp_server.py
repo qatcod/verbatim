@@ -21,23 +21,28 @@ from typing import Any
 
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
+from mcp.server.context import ServerRequestContext
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 
 from . import __version__, state
 
-server: Server = Server("verbatim")
-
-
 # ----------------------- tool definitions -----------------------
+#
+# mcp 2.x registers handlers through the `Server` constructor (`on_list_tools=`/`on_call_tool=`),
+# not the 1.x `@server.list_tools()`/`@server.call_tool()` decorators, which it removed outright
+# (SEP-2577, 2026-07-28). So the handlers are defined first and the `server` instance is built from
+# them below — same tools, same arguments, same returned text, registered the way 2.x reads them.
 
 
 _CONFIDENCE_ENUM = {"type": "string", "enum": ["low", "medium", "high"]}
 
 
-@server.list_tools()
-async def _list_tools() -> list[types.Tool]:
-    return [
+async def _list_tools(
+    _ctx: ServerRequestContext[Any],
+    _params: types.PaginatedRequestParams | None = None,
+) -> types.ListToolsResult:
+    tools = [
         types.Tool(
             name="list_commitments",
             description=(
@@ -140,14 +145,18 @@ async def _list_tools() -> list[types.Tool]:
             },
         ),
     ]
+    return types.ListToolsResult(tools=tools)
 
 
 # ----------------------- tool dispatch -----------------------
 
 
-@server.call_tool()
-async def _call_tool(name: str, arguments: dict[str, Any] | None) -> list[types.TextContent]:
-    args = arguments or {}
+async def _call_tool(
+    _ctx: ServerRequestContext[Any],
+    params: types.CallToolRequestParams,
+) -> types.CallToolResult:
+    name = params.name
+    args = params.arguments or {}
     conn = state.open_db()
     try:
         if name == "list_commitments":
@@ -200,7 +209,19 @@ async def _call_tool(name: str, arguments: dict[str, Any] | None) -> list[types.
             text = f"Unknown tool: {name}"
     finally:
         conn.close()
-    return [types.TextContent(type="text", text=text)]
+    return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+
+# ----------------------- server instance -----------------------
+#
+# Built after the handlers because 2.x takes them as constructor kwargs. `mcp_http.build_app`
+# imports this exact instance, so stdio and HTTP serve the same tools from the same registration.
+server: Server = Server(
+    "verbatim",
+    version=__version__,
+    on_list_tools=_list_tools,
+    on_call_tool=_call_tool,
+)
 
 
 # ----------------------- formatting -----------------------
