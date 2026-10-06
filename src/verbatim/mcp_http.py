@@ -10,14 +10,13 @@ from __future__ import annotations
 import hmac
 from contextlib import asynccontextmanager
 
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
-
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 
 def require_token(expected: str, presented: str | None) -> bool:
