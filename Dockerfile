@@ -1,7 +1,10 @@
 # Multi-stage build: produce a slim runtime image with verbatim-ai installed
 # from PyPI (or local source when building from a checkout).
 # Final image is python:3.12-slim + verbatim-ai installed via pip — about 200MB.
-# Entry point is `verbatim`, so `docker run ghcr.io/qatcod/verbatim-ai <cmd>` works.
+# Default CMD serves verbatim's MCP tools over HTTP (`verbatim-mcp --transport http`) -- that is
+# the one thing a container is good for that a laptop-local stdio client is not: being reachable
+# over a network. Override the CMD to run any other `verbatim` or `verbatim-mcp` invocation
+# instead, e.g. `docker run ghcr.io/qatcod/verbatim-ai verbatim serve --host 0.0.0.0`.
 
 FROM python:3.12-slim AS builder
 
@@ -42,10 +45,22 @@ RUN pip install --no-index --find-links /tmp/wheels verbatim-ai && \
 
 USER verbatim
 WORKDIR /home/verbatim
+
+# State (the SQLite state graph verbatim builds from every extraction) lives here and MUST be on
+# a mounted volume: a state graph nobody backs up is one you lose. VERBATIM_DB_PATH (set above)
+# is the env var verbatim/store.py actually reads to resolve the DB path -- not "VERBATIM_DB".
 VOLUME ["/data"]
 
-# Expose the web UI port (`verbatim serve` default).
+# Expose the web UI port (`verbatim serve` default) and the MCP HTTP port below.
 EXPOSE 8765
+EXPOSE 8081
 
-ENTRYPOINT ["verbatim"]
-CMD ["--help"]
+# Default to HTTP, not stdio: a container is only reachable over the network, so HTTP is the only
+# transport that makes sense as its default here -- the opposite of the CLI, where stdio stays
+# default because Claude Code and Cursor already invoke it with no arguments. That asymmetry is
+# deliberate on both sides; do not "fix" it into agreement.
+#
+# verbatim-mcp refuses to start without VERBATIM_MCP_TOKEN set (see mcp_server.main /
+# mcp_http.build_app) -- an unconfigured container fails loudly on boot instead of serving a
+# team's extracted state anonymously. Pass -e VERBATIM_MCP_TOKEN=<token> at `docker run`.
+CMD ["verbatim-mcp", "--transport", "http", "--port", "8081"]

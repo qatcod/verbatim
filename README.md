@@ -8,7 +8,7 @@
 
 > The AI memory layer for engineering teams. Continuously synthesizes your meetings, Slack, and code collaboration into a single source of truth — and exposes that state to any AI agent as a tool.
 
-**Status:** v0.11.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), GitHub PR discussions, and Google / Outlook calendar events. Local SQLite state graph with cross-session reconciliation. Proactive layer — deadline tracking (overdue / due-soon + Slack nudges), staleness detection, auto-standup, contradiction detection. Web UI with per-person aggregated views, Slack bot with interactive HITL (Confirm / Dismiss / Edit modal / Reassign picker) and a full audit trail, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Natural-language `ask` over state, plus plain-language `simplify` for non-technical readers. Typed entity relationships with a visual graph view. Cost guardrails (per-model budget, dry-run, daily caps). 445 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
+**Status:** v0.14.0 — extract structured commitments, decisions, open questions, and blockers from meeting transcripts, Slack threads (live + export), GitHub PR discussions, and Google / Outlook calendar events. Local SQLite state graph with cross-session reconciliation. Proactive layer — deadline tracking (overdue / due-soon + Slack nudges), staleness detection, auto-standup, contradiction detection. Web UI with per-person aggregated views, Slack bot with interactive HITL (Confirm / Dismiss / Edit modal / Reassign picker) and a full audit trail, daemon mode (`verbatim watch`), MCP server for Claude / Cursor / any agent — stdio by default, or `--transport http` for network clients, token-gated. Projects into Linear, GitHub Issues, or Jira. Runs on Anthropic Claude or any local model via Ollama. Natural-language `ask` over state, plus plain-language `simplify` for non-technical readers. Typed entity relationships with a visual graph view. Cost guardrails (per-model budget, dry-run, daily caps). 532 tests, CI on 3.10 / 3.11 / 3.12. Design implementation per Claude Design handoff at `docs/design/`.
 
 ---
 
@@ -311,6 +311,42 @@ The MCP server exposes seven tools:
 | `recent_sessions` | Recent extraction sessions for source-tracing |
 | `verbatim_stats` | Quick counts of open items |
 | `resolve_entity` | Mark a commitment/decision/etc. as resolved |
+
+### Serving MCP over HTTP instead of stdio
+
+`verbatim-mcp` defaults to stdio — the transport Claude Code and Cursor already invoke with no
+arguments — but any agent that needs to reach Verbatim over a network (a container, a remote
+Convaa runner, a shared deployment) can run the same tools behind HTTP instead:
+
+```bash
+export VERBATIM_MCP_TOKEN=some-long-random-token
+verbatim-mcp --transport http --port 8081
+```
+
+`VERBATIM_MCP_TOKEN` is required for the HTTP transport: an unset or empty token means the server
+refuses to start at all, rather than serving a team's extracted state anonymously. Clients
+authenticate with either `Authorization: Bearer <token>` or `X-API-Key: <token>`. A `GET /health`
+endpoint (unauthenticated) reports `{"status": "ok", ...}` once the server is up; the tools
+themselves are served over `POST /mcp` (Streamable HTTP).
+
+### Running the HTTP MCP server via Docker
+
+The `Dockerfile` in this repo builds an image whose default command serves MCP over HTTP — a
+container is only reachable over the network, so HTTP (not stdio) is the sensible default here:
+
+```bash
+docker build -t verbatim-ai .
+docker run -d --name verbatim-mcp \
+  -p 8081:8081 \
+  -e VERBATIM_MCP_TOKEN=some-long-random-token \
+  -v verbatim-data:/data \
+  verbatim-ai
+```
+
+State (the SQLite state graph) is written to `/data/state.db` inside the container, resolved via
+`VERBATIM_DB_PATH` — mount `/data` as a volume (as above) or every extraction is lost the moment
+the container is removed. Omitting `VERBATIM_MCP_TOKEN` makes the container exit immediately
+instead of serving anonymously.
 
 ## Sample output
 
