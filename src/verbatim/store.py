@@ -32,8 +32,22 @@ CREATE TABLE IF NOT EXISTS sessions (
     extracted_at TEXT NOT NULL,
     transcript_chars INTEGER,
     input_tokens INTEGER,
-    output_tokens INTEGER
+    output_tokens INTEGER,
+    -- A caller's OWN id for the thing being ingested, for idempotence. Convaa's
+    -- transcript id, say. NULL for a human running `verbatim ingest` by hand, which is
+    -- why the unique index below is partial: SQLite treats NULLs as distinct, but being
+    -- explicit about it keeps the intent readable rather than relying on that.
+    external_id TEXT
 );
+
+-- NOTE: the unique index on external_id is created in _migrate(), NOT here, and that is
+-- load-bearing rather than stylistic. connect() runs executescript(SCHEMA) BEFORE
+-- _migrate(), so on a database created by an earlier version the CREATE TABLE above is a
+-- no-op (the table exists, without the column) and a CREATE INDEX here would reference a
+-- column that does not exist yet -- `OperationalError: no such column: external_id`, on
+-- every open, for every existing install. _migrate() adds the column first and then the
+-- index, which is correct for a fresh DB and a migrated one alike. (Found by testing the
+-- old-DB path rather than only the fresh one.)
 
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
@@ -163,6 +177,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "UPDATE entities SET code = ? WHERE id = ?", (i, r["id"]),
             )
+    # v0.15.0: sessions.external_id, for idempotent ingestion by an at-least-once caller.
+    #
+    # Its OWN PRAGMA read, deliberately: `existing_cols` above is `entities`, and reusing
+    # it here would test the wrong table -- which passes on a fresh DB (both tables get
+    # the column from the CREATE TABLE) and silently skips the ALTER on exactly the old
+    # DBs this function exists for.
+    session_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    if "external_id" not in session_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN external_id TEXT")
+    # Outside the column guard, not inside it. A DB that got the column from CREATE TABLE
+    # never enters the branch above, so an index created only in there would be missing on
+    # every fresh DB -- the inverse of the bug the guard prevents. IF NOT EXISTS makes
+    # running it every open free.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_external_id "
+        "ON sessions(external_id) WHERE external_id IS NOT NULL"
+    )
+
     if "channel" not in existing_cols:
         conn.execute("ALTER TABLE entities ADD COLUMN channel TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_channel ON entities(channel)")
@@ -286,6 +321,7 @@ def insert_session(
     transcript_chars: int | None = None,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    external_id: str | None = None,
 ) -> str:
     session_id = new_id()
     conn.execute(
@@ -293,8 +329,8 @@ def insert_session(
         INSERT INTO sessions (
             id, source_path, source_kind, model, meeting_summary,
             participants_json, extracted_at, transcript_chars,
-            input_tokens, output_tokens
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            input_tokens, output_tokens, external_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -307,9 +343,44 @@ def insert_session(
             transcript_chars,
             input_tokens,
             output_tokens,
+            external_id,
         ),
     )
     return session_id
+
+
+def count_entities_by_kind(conn: sqlite3.Connection, session_id: str) -> dict[str, int]:
+    """Per-kind entity counts for one session, zero-filled.
+
+    Zero-filled on purpose: a caller comparing a replayed ingest's counts against the
+    original's would otherwise see a dict missing the kinds that happened to be empty, and
+    read "no blockers extracted" as "the blockers key is gone". Every kind is always
+    present; an empty meeting reads as zeros, which is what it is.
+    """
+    counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
+    for row in conn.execute(
+        "SELECT kind, COUNT(*) AS n FROM entities WHERE session_id = ? GROUP BY kind",
+        (session_id,),
+    ).fetchall():
+        # A kind outside the four is not invented here; if the schema ever grows one, it
+        # shows up rather than being silently dropped by a fixed-key update.
+        counts[row["kind"]] = row["n"]
+    return counts
+
+
+def find_session_by_external_id(
+    conn: sqlite3.Connection, external_id: str
+) -> sqlite3.Row | None:
+    """The session a previous ingest wrote for this caller-supplied id, if any.
+
+    Returns the row rather than a bool so a repeat ingest can hand the caller the FIRST
+    run's session_id instead of an error: a retry is correct behaviour on the caller's
+    part -- it could not know the earlier attempt had landed -- so the right answer is the
+    original result, not a failure.
+    """
+    return conn.execute(
+        "SELECT * FROM sessions WHERE external_id = ?", (external_id,)
+    ).fetchone()
 
 
 def parse_channel_from_source(source_path: str | None) -> str | None:
