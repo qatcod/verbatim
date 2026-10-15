@@ -161,9 +161,10 @@ def test_x_api_key_header_is_accepted_as_a_fallback_credential():
     assert r.status_code == 200
 
 
-# The seven tools mcp_server registers, in order. Asserted by equality, not membership: a
-# membership check (`"list_commitments" in tool_names`) stays green while six of the seven
-# silently disappear, which is not a property worth asserting.
+# The tools mcp_server registers, in order. Asserted by equality, not membership: a membership
+# check (`"list_commitments" in tool_names`) stays green while all but one silently disappear,
+# which is not a property worth asserting. Updating this list is the intended cost of adding a
+# tool -- it is how a tool that appears by accident, or disappears, gets noticed.
 _EXPECTED_TOOLS = [
     "list_commitments",
     "list_decisions",
@@ -172,6 +173,7 @@ _EXPECTED_TOOLS = [
     "recent_sessions",
     "verbatim_stats",
     "resolve_entity",
+    "ingest_transcript",
 ]
 
 
@@ -227,7 +229,7 @@ def _seed_db(tmp_db_path, extraction, diagnostics, monkeypatch) -> None:
         conn.close()
 
 
-def test_tools_list_returns_exactly_the_seven_tools():
+def test_tools_list_returns_exactly_the_registered_tools():
     """A real MCP round trip over HTTP: initialize, then tools/list."""
 
     async def round_trip() -> list[str]:
@@ -341,3 +343,67 @@ def test_http_host_defaults_to_local_only():
     # because binding every interface is the point in a container). Nothing previously asserted
     # this value at all, so it silently defaulted to 0.0.0.0 even for the CLI.
     assert parse_transport_args(["--transport", "http"]).host == "127.0.0.1"
+
+def test_ingest_transcript_works_over_the_http_transport(tmp_db_path, monkeypatch):
+    """The point of the whole change: a WRITE reaching the state graph over HTTP, not stdio.
+
+    Every other test in this file exercises reads. Ingestion is the reason Convaa needs a URL at
+    all -- it cannot spawn a process to pipe a transcript into -- so a round trip that calls the
+    tool and then reads the committed rows back is the assertion that the feature exists.
+
+    The model call is faked (CI has no inference host) but nothing else is: real Starlette app, real
+    streamable-http client, real session initialise, real SQLite write.
+    """
+    from verbatim.extractor import ExtractionDiagnostics
+    from verbatim.schema import Commitment, Confidence, ExtractionResult, SourceReference
+
+    monkeypatch.setenv("VERBATIM_DB_PATH", str(tmp_db_path))
+
+    def fake_extract(transcript: str, **kwargs):
+        return (
+            ExtractionResult(
+                meeting_summary="m",
+                participants=["ana"],
+                commitments=[
+                    Commitment(
+                        actor="ana", deliverable="ship the export",
+                        confidence=Confidence.HIGH,
+                        sources=[SourceReference(verbatim_quote="I'll ship the export",
+                                                 rationale="explicit")],
+                    )
+                ],
+            ),
+            ExtractionDiagnostics(model="fake", input_tokens=1, output_tokens=1,
+                                  stop_reason="end_turn", transcript_chars=len(transcript)),
+        )
+
+    monkeypatch.setattr("verbatim.extractor.extract", fake_extract)
+
+    async def round_trip():
+        async with _mcp_session() as session:
+            first = await session.call_tool(
+                "ingest_transcript",
+                {"text": "ana: I'll ship the export", "external_id": "transcript-42"},
+            )
+            # Same call again: the retry an at-least-once caller makes.
+            second = await session.call_tool(
+                "ingest_transcript",
+                {"text": "ana: I'll ship the export", "external_id": "transcript-42"},
+            )
+            listed = await session.call_tool("list_commitments", {})
+            return first.content[0].text, second.content[0].text, listed.content[0].text
+
+    first, second, listed = asyncio.run(round_trip())
+
+    assert "Ingested 1 item(s)" in first
+    assert "Already ingested" in second, "the retry must replay, not re-extract"
+    # Read back through a DIFFERENT tool: the write is really in the graph, not just reported.
+    assert "ship the export" in listed
+
+    # And exactly one session landed, which is what the duplicate would have broken.
+    conn = state.open_db(tmp_db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
+    finally:
+        conn.close()

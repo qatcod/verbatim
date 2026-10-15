@@ -2,6 +2,56 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] — 2026-10-15
+
+### Added — Reachable over HTTP, in both directions
+
+Verbatim can now be used by a client that cannot spawn a process. Two halves, and the second is the
+one that makes the first useful for automation.
+
+**An HTTP transport for the MCP server.** `verbatim-mcp --transport http` serves the tools over
+streamable HTTP, token-gated via `VERBATIM_MCP_TOKEN`. stdio remains the default, because Claude
+Code and Cursor already invoke `verbatim-mcp` with no arguments and changing that would break every
+existing configuration silently. The container image defaults to HTTP instead, which is the one
+thing a container is for that a laptop-local stdio client is not.
+
+Auth fails closed: an unset token makes the service refuse to start rather than serve a team's
+extracted state anonymously, and `--host` defaults to `127.0.0.1` so trying it out on a laptop does
+not open the LAN. The Dockerfile passes `--host 0.0.0.0` explicitly, where that is the point.
+
+**`ingest_transcript`, the first write tool.** Previously the HTTP transport exposed only the seven
+read tools, and ingestion was reachable solely as a CLI command reading a file or stdin — which
+still required a process that could spawn verbatim, i.e. exactly the constraint the transport was
+meant to remove. A caller with a URL could read the state graph but could not add to it.
+
+- **Idempotent via `external_id`.** Pass your own id for the transcript and a repeat returns the
+  first run's `session_id` and counts without re-extracting. This is not a convenience: a caller
+  that retries (because its lease expired while an extraction was still running) previously wrote a
+  second session plus a full duplicate set of commitments, decisions, questions and blockers, and
+  nothing noticed. Enforced by a partial unique index on `sessions.external_id`, so a hand-run
+  `verbatim ingest` — which has no id — is unaffected.
+- **One extraction at a time per process.** Extraction runs against a host with four slots that a
+  voice turn also uses, and a long transcript has a large prefill. The limit lives next to the model
+  call so it holds for every client, including a human running `verbatim ingest` during a live
+  meeting. In-process, which serialises one container and no more; the comment in `mcp_server.py`
+  says what to do on the day a second replica exists.
+- Losing a cross-process race returns the winner's result rather than raising: the work is done,
+  just not by this caller.
+- A meeting with nothing to extract reports explicit zeros, not an error. Arguments are validated by
+  hand, because mcp 2.x does not validate against a tool's `inputSchema`.
+
+### Changed
+
+- `sessions` gains a nullable `external_id`, added in place for existing databases by the usual
+  additive migration. The unique index is created in `_migrate()` and deliberately **not** in
+  `SCHEMA`: `connect()` runs `executescript(SCHEMA)` before `_migrate()`, so on a pre-existing
+  database the `CREATE TABLE IF NOT EXISTS` is a no-op and an index there would reference a column
+  that does not exist yet — `no such column: external_id`, on every open, for every existing
+  install.
+- The ingest lock is keyed by event loop rather than created once at import. `asyncio.Lock()` binds
+  to the loop that first awaits it and raises on any later one, so a module-level lock works only
+  while exactly one loop ever exists in the process.
+
 ## [0.14.0] — 2026-07-16
 
 ### Added — Watchdog observability

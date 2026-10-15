@@ -42,6 +42,7 @@ def save_extraction(
     source_kind: str = "transcript",
     auto_reconcile: bool = False,
     reconcile_threshold: int = reconcile.DEFAULT_THRESHOLD,
+    external_id: str | None = None,
 ) -> IngestSummary:
     """Persist a complete ExtractionResult as one session + N entities + their sources.
 
@@ -63,6 +64,7 @@ def save_extraction(
             transcript_chars=diagnostics.transcript_chars,
             input_tokens=diagnostics.input_tokens,
             output_tokens=diagnostics.output_tokens,
+            external_id=external_id,
         )
 
         counts = {"commitment": 0, "decision": 0, "open_question": 0, "blocker": 0}
