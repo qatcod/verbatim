@@ -31,13 +31,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 
 import httpx
 from anthropic import Anthropic
 
 from .prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-from .schema import ExtractionResult
+from .schema import ExtractionResult, validate_extraction_leniently
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 8192
@@ -149,7 +150,8 @@ def _extract_anthropic(
             f"{response.stop_reason}. Content: {response.content!r}"
         )
 
-    result = ExtractionResult.model_validate(tool_use_block.input)
+    result, dropped = validate_extraction_leniently(tool_use_block.input)
+    _warn_dropped(dropped, model=chosen_model)
     diagnostics = ExtractionDiagnostics(
         model=chosen_model,
         input_tokens=response.usage.input_tokens,
@@ -216,7 +218,8 @@ def _extract_ollama(
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Ollama tool arguments aren't valid JSON: {e}") from e
 
-    result = ExtractionResult.model_validate(args)
+    result, dropped = validate_extraction_leniently(args)
+    _warn_dropped(dropped, model=f"ollama:{ollama_model}")
 
     usage = data.get("usage") or {}
     diagnostics = ExtractionDiagnostics(
@@ -227,3 +230,22 @@ def _extract_ollama(
         transcript_chars=len(transcript),
     )
     return result, diagnostics
+
+
+def _warn_dropped(dropped: list[str], *, model: str) -> None:
+    """Surface a partial extraction. Never silent.
+
+    A partial extraction looks exactly like a meeting with fewer commitments in it, which is the
+    worst way for this to fail: nobody asks why an item is missing if they do not know one was
+    dropped. stderr rather than a return value because every caller of extract() already has the
+    counts and none of them had anywhere to put this.
+    """
+    if not dropped:
+        return
+    print(
+        f"[verbatim] {len(dropped)} extracted item(s) were dropped as malformed "
+        f"(model: {model}). The rest of the extraction was kept:",
+        file=sys.stderr,
+    )
+    for d in dropped:
+        print(f"[verbatim]   - {d}", file=sys.stderr)
