@@ -2,6 +2,34 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-10-15
+
+### Added — `ingest_transcript` returns structured items, not only prose
+
+The ingest result now carries `structuredContent` alongside its text: the session id, a `replayed`
+flag, and the commitments, decisions, open questions and blockers that extraction produced, each with
+its supporting quotes. `outputSchema` declares the shape.
+
+**Why, concretely.** The consumer is a program — Convaa's thread renderer — and the thing it must do
+before posting an action item to a team is check that the item's quote is a real substring of the
+transcript. Everything the read tools return is Markdown written for a model to read
+(`- [high] id=ab12cd34  **ana** — ship the export by Friday`), so a program had two bad options:
+regex an owner, a deadline and a quote back out of a rendered sentence, or go without the check. The
+prose is still returned, so a model calling the same tool is unaffected.
+
+**And the items are scoped to the session**, which the MCP surface could not express before: the read
+tools filter by actor, confidence and status but not by session, so "the items from THIS meeting" was
+not a question they could answer. `store.fetch_entities` has accepted a `session_id` all along.
+
+Two deliberate choices in that query, both of which change what a consumer sees:
+
+- `status=None` — this reports what the extraction produced, not what is currently open. A resolved
+  item still belongs in the record of the meeting it came from.
+- `canonical_only=False` — the canonical view folds duplicates, which is right for "what is live
+  team-wide" and wrong here. When reconciliation merges a commitment from this meeting into an older
+  canonical, the canonical view hides it, and the thread would post one item fewer than the meeting
+  contained with nothing logged.
+
 ## [0.15.0] — 2026-10-15
 
 ### Added — Reachable over HTTP, in both directions

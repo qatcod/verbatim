@@ -97,6 +97,17 @@ def _patch(monkeypatch, fake: FakeExtractor) -> None:
     monkeypatch.setattr("verbatim.extractor.extract", fake)
 
 
+async def _ingest_text(conn, args) -> str:
+    """The prose half of the result.
+
+    `_ingest_transcript` returns (text, structured) since structured output was added. These tests
+    were written against the text and still assert the right things about it; the structured half has
+    its own section at the end of this file.
+    """
+    text, _structured = await mcp_server._ingest_transcript(conn, args)
+    return text
+
+
 def _session_id(output: str) -> str:
     return output.splitlines()[0].split()[-1].rstrip(".")
 
@@ -127,8 +138,8 @@ def test_a_repeat_with_the_same_external_id_does_not_re_extract(conn, monkeypatc
         fake = FakeExtractor()
         _patch(monkeypatch, fake)
 
-        first = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
-        second = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+        first = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
+        second = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
 
         assert fake.calls == 1, "the second ingest must not pay for another model call"
         assert _session_id(first) == _session_id(second)
@@ -143,8 +154,8 @@ def test_a_repeat_reports_the_first_run_s_counts(conn, monkeypatch):
     async def _run():
         fake = FakeExtractor()
         _patch(monkeypatch, fake)
-        await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
-        replay = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+        await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
+        replay = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
 
         # Not an error: the caller's retry was correct behaviour, it could not know the first had
         # landed. So it gets the original answer, marked as a replay.
@@ -160,8 +171,8 @@ def test_without_an_external_id_each_ingest_is_its_own_session(conn, monkeypatch
         # A human running `verbatim ingest` twice means it twice. Idempotence is opt-in, via the id.
         fake = FakeExtractor()
         _patch(monkeypatch, fake)
-        a = await mcp_server._ingest_transcript(conn, {"text": "t"})
-        b = await mcp_server._ingest_transcript(conn, {"text": "t"})
+        a = await _ingest_text(conn, {"text": "t"})
+        b = await _ingest_text(conn, {"text": "t"})
         assert fake.calls == 2
         assert _session_id(a) != _session_id(b)
 
@@ -172,8 +183,8 @@ def test_different_external_ids_are_different_sessions(conn, monkeypatch):
     async def _run():
         fake = FakeExtractor()
         _patch(monkeypatch, fake)
-        a = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
-        b = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-2"})
+        a = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
+        b = await _ingest_text(conn, {"text": "t", "external_id": "tx-2"})
         assert fake.calls == 2
         assert _session_id(a) != _session_id(b)
 
@@ -193,17 +204,17 @@ def test_a_replay_answers_without_waiting_for_an_extraction_in_flight(conn, monk
 
     async def _run():
         # One transcript already ingested.
-        first = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "done"})
+        first = await _ingest_text(conn, {"text": "t", "external_id": "done"})
 
         # A different, slow ingest now holds the lock.
         inflight = asyncio.create_task(
-            mcp_server._ingest_transcript(conn, {"text": "t2", "external_id": "other"})
+            _ingest_text(conn, {"text": "t2", "external_id": "other"})
         )
         await asyncio.sleep(0.1)          # let it get inside the lock
         assert not inflight.done()
 
         started = time.monotonic()
-        replay = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "done"})
+        replay = await _ingest_text(conn, {"text": "t", "external_id": "done"})
         waited = time.monotonic() - started
 
         await inflight
@@ -228,7 +239,7 @@ def test_concurrent_ingests_of_one_id_extract_exactly_once(conn, monkeypatch):
         _patch(monkeypatch, fake)
 
         outs = await asyncio.gather(
-            *[mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "same"}) for _ in range(4)]
+            *[_ingest_text(conn, {"text": "t", "external_id": "same"}) for _ in range(4)]
         )
 
         assert fake.calls == 1, f"4 concurrent ingests caused {fake.calls} extractions"
@@ -247,8 +258,8 @@ def test_concurrent_ingests_of_different_ids_do_not_overlap(conn, monkeypatch):
 
         started = time.monotonic()
         await asyncio.gather(
-            mcp_server._ingest_transcript(conn, {"text": "a", "external_id": "x"}),
-            mcp_server._ingest_transcript(conn, {"text": "b", "external_id": "y"}),
+            _ingest_text(conn, {"text": "a", "external_id": "x"}),
+            _ingest_text(conn, {"text": "b", "external_id": "y"}),
         )
         elapsed = time.monotonic() - started
 
@@ -267,7 +278,7 @@ def test_a_meeting_with_nothing_to_extract_is_not_an_error(conn, monkeypatch):
         # The spec is explicit: "a meeting with no commitments is ordinary". Counts are printed as
         # explicit zeros so a caller can tell this from a failure.
         _patch(monkeypatch, FakeExtractor(empty=True))
-        out = await mcp_server._ingest_transcript(conn, {"text": "just chatting"})
+        out = await _ingest_text(conn, {"text": "just chatting"})
         assert "commitments: 0" in out
         assert "blockers: 0" in out
 
@@ -280,7 +291,7 @@ def test_an_extraction_failure_leaves_no_session_behind(conn, monkeypatch):
         # partial session would make the retry a duplicate.
         _patch(monkeypatch, FakeExtractor(boom=True))
         with pytest.raises(RuntimeError):
-            await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+            await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
         assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
 
     asyncio.run(_run())
@@ -292,11 +303,11 @@ def test_a_failed_ingest_can_be_retried(conn, monkeypatch):
         # would permanently poison that transcript.
         _patch(monkeypatch, FakeExtractor(boom=True))
         with pytest.raises(RuntimeError):
-            await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+            await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
 
         good = FakeExtractor()
         _patch(monkeypatch, good)
-        out = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+        out = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
         assert good.calls == 1
         assert "Ingested 4 item(s)" in out
 
@@ -326,7 +337,7 @@ def test_bad_arguments_are_rejected(conn, monkeypatch, args):
         fake = FakeExtractor()
         _patch(monkeypatch, fake)
         with pytest.raises(ValueError):
-            await mcp_server._ingest_transcript(conn, args)
+            await _ingest_text(conn, args)
         assert fake.calls == 0, "a bad request must not reach the model"
 
     asyncio.run(_run())
@@ -364,7 +375,7 @@ def test_a_race_lost_to_another_process_returns_that_run_s_result(conn, tmp_path
     _patch(monkeypatch, fake)
 
     async def _run():
-        out = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "tx-1"})
+        out = await _ingest_text(conn, {"text": "t", "external_id": "tx-1"})
         assert "Already ingested" in out, "losing the race must return the winner's result, not raise"
 
     asyncio.run(_run())
@@ -469,3 +480,158 @@ def test_counts_are_zero_filled(tmp_path):
         }
     finally:
         c.close()
+
+# ----------------------- structured output -----------------------
+#
+# The reason this exists: the consumer is a PROGRAM (Convaa's thread renderer), and the thing it must
+# do before posting an item to a team is check that the item's quote is a real substring of the
+# transcript. The read tools return Markdown prose for a model to read -- regex-parsing an owner, a
+# deadline and a quote back out of a rendered sentence is not a foundation for that check.
+
+
+def test_the_structured_half_carries_this_session_s_items(conn, monkeypatch):
+    fake = FakeExtractor()
+    _patch(monkeypatch, fake)
+
+    async def _run():
+        _text, structured = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "x"})
+        assert structured["replayed"] is False
+        assert structured["session_id"]
+        # All four kinds, under stable wire names a consumer's parser is keyed on.
+        assert set(structured) >= {"session_id", "replayed", "commitments", "decisions", "open_questions", "blockers"}
+        c = structured["commitments"][0]
+        # Fields, not a sentence.
+        assert c["actor"] == "ana"
+        assert c["deliverable"] == "ship it"
+        # Lowercase, which is how it is stored -- worth asserting rather than normalising,
+        # because a consumer branching on confidence has to match what actually arrives.
+        assert c["confidence"] == "high"
+        # And the quotes, which are the whole point — an item whose quote is not in the transcript
+        # has to be droppable by the consumer.
+        assert c["quotes"] == ["I'll ship it"]
+
+    asyncio.run(_run())
+
+
+def test_a_replay_returns_the_same_structured_items(conn, monkeypatch):
+    # A retry must give the consumer the same items, not an empty set: the thread renderer may be
+    # running on the retry, and "verbatim already has it" must not mean "there is nothing to post".
+    fake = FakeExtractor()
+    _patch(monkeypatch, fake)
+
+    async def _run():
+        _t1, first = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "x"})
+        _t2, replay = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "x"})
+        assert fake.calls == 1
+        assert replay["replayed"] is True
+        assert replay["session_id"] == first["session_id"]
+        assert replay["commitments"] == first["commitments"]
+        assert replay["blockers"] == first["blockers"]
+
+    asyncio.run(_run())
+
+
+def test_an_empty_meeting_returns_empty_lists_not_missing_keys(conn, monkeypatch):
+    # Same reasoning as the zero-filled counts: a consumer reading `structured["commitments"]` must
+    # not have to distinguish "no commitments" from "the key is gone".
+    _patch(monkeypatch, FakeExtractor(empty=True))
+
+    async def _run():
+        _text, structured = await mcp_server._ingest_transcript(conn, {"text": "just chatting"})
+        for key in ("commitments", "decisions", "open_questions", "blockers"):
+            assert structured[key] == [], key
+
+    asyncio.run(_run())
+
+
+def test_the_items_are_scoped_to_this_session(conn, monkeypatch):
+    # The gap this closes: the read tools filter by actor/confidence/status but NOT by session, so
+    # "the items from THIS meeting" was not a question the MCP surface could answer. Two ingests must
+    # not see each other's items.
+    fake = FakeExtractor()
+    _patch(monkeypatch, fake)
+
+    async def _run():
+        _t1, a = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "m1"})
+        _t2, b = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "m2"})
+        assert a["session_id"] != b["session_id"]
+        assert len(a["commitments"]) == 1
+        assert len(b["commitments"]) == 1
+        assert a["commitments"][0]["id"] != b["commitments"][0]["id"]
+
+    asyncio.run(_run())
+
+
+def test_the_tool_result_carries_structured_content(conn, monkeypatch, tmp_path):
+    # Through _call_tool, which is what an MCP client actually receives — the handler returning a
+    # tuple is useless if the result does not carry it.
+    import mcp.types as types
+
+    monkeypatch.setenv("VERBATIM_DB_PATH", str(tmp_path / "s.db"))
+    _patch(monkeypatch, FakeExtractor())
+
+    async def _run():
+        params = types.CallToolRequestParams(
+            name="ingest_transcript", arguments={"text": "t", "external_id": "x"}
+        )
+        result = await mcp_server._call_tool(None, params)
+        assert not result.is_error   # mcp 2.x field name; `isError` is only a serialisation alias
+        assert result.structured_content is not None
+        assert result.structured_content["commitments"][0]["actor"] == "ana"
+        # The prose is kept as well, so a model calling the same tool still gets something readable.
+        assert "Ingested" in result.content[0].text
+
+    asyncio.run(_run())
+
+
+def test_a_read_tool_carries_no_structured_content(conn, monkeypatch, tmp_path):
+    # structured_content is initialised per call; a read tool must not inherit the previous call's.
+    import mcp.types as types
+
+    monkeypatch.setenv("VERBATIM_DB_PATH", str(tmp_path / "s.db"))
+
+    async def _run():
+        params = types.CallToolRequestParams(name="verbatim_stats", arguments={})
+        result = await mcp_server._call_tool(None, params)
+        assert result.structured_content is None
+
+    asyncio.run(_run())
+
+def test_an_item_merged_into_an_older_canonical_is_still_reported(conn, monkeypatch):
+    """Reconciliation must not make a meeting's own item vanish from its thread render.
+
+    This is what `canonical_only=False` buys, and why the default view is wrong here. The read tools
+    show canonical entities only — the right view for "what is live team-wide", because it folds
+    duplicates. But this result answers a different question: "what did THIS extraction produce".
+    If a commitment from this meeting gets merged into an older canonical (verbatim does that when a
+    similar item already exists), the canonical view hides it — and the thread would silently post
+    one item fewer than the meeting actually contained, with nothing logged.
+
+    Mutation-tested: flipping canonical_only to True fails only this test, which is why it is here.
+    """
+    fake = FakeExtractor()
+    _patch(monkeypatch, fake)
+
+    async def _run():
+        _t, first = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "m1"})
+        item_id = first["commitments"][0]["id"]
+
+        # A second, unrelated session whose commitment becomes the canonical, then merge this
+        # meeting's item into it — exactly the shape auto-reconcile produces.
+        other = store.insert_session(
+            conn, source_path=None, source_kind="transcript", model="m",
+            meeting_summary="older", participants=[],
+        )
+        canonical = store.insert_entity(
+            conn, session_id=other, kind="commitment", confidence="high",
+            payload={"actor": "ana", "deliverable": "ship it"},
+            primary_actor="ana", primary_topic="ship it",
+        )
+        store.set_canonical(conn, item_id, canonical)
+
+        # Re-read through the replay path, which is what a retry (or the sweep) would do.
+        _t2, replay = await mcp_server._ingest_transcript(conn, {"text": "t", "external_id": "m1"})
+        ids = [c["id"] for c in replay["commitments"]]
+        assert item_id in ids, "a merged item disappeared from its own meeting's result"
+
+    asyncio.run(_run())

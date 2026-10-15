@@ -178,6 +178,27 @@ async def _list_tools(
                 },
                 "required": ["text"],
             },
+            # Declared, because the structured half is a CONTRACT with a program rather than prose
+            # for a model: Convaa's thread renderer is keyed on these names, and an undeclared shape
+            # is one that can drift without anything noticing. `item` is intentionally loose on the
+            # payload fields (they differ per kind) but exact on the two every consumer depends on —
+            # `confidence`, which it branches on, and `quotes`, which it must verify against the
+            # transcript before posting anything to a team.
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "replayed": {
+                        "type": "boolean",
+                        "description": "True when this call returned an earlier run's result unchanged.",
+                    },
+                    "commitments": {"type": "array", "items": {"type": "object"}},
+                    "decisions": {"type": "array", "items": {"type": "object"}},
+                    "open_questions": {"type": "array", "items": {"type": "object"}},
+                    "blockers": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["session_id", "replayed", "commitments", "decisions", "open_questions", "blockers"],
+            },
         ),
     ]
     return types.ListToolsResult(tools=tools)
@@ -223,6 +244,55 @@ def _ingest_lock() -> asyncio.Lock:
     return lock
 
 
+def _session_items(conn, session_id: str) -> dict[str, Any]:
+    """This session's extracted items, structured, with the quotes that support each one.
+
+    WHY STRUCTURED AND NOT THE PROSE THE READ TOOLS RETURN. `_format_entities` renders Markdown for
+    a model to read — `- [HIGH] id=ab12cd34  **ana** — ship the export by Friday`. A PROGRAM that
+    needs the owner, the deliverable, the deadline and the supporting quote would have to regex that
+    format back apart, and would break silently the first time a field is rendered differently. The
+    consumer here is Convaa's thread renderer, which must verify every quote is a real substring of
+    the transcript before it posts an item to a team. That check cannot be built on a parsed
+    sentence.
+    
+    SCOPED TO THE SESSION, which is the other half of why this exists: the read tools filter by
+    actor, confidence and status but not by session, so "the items from THIS meeting" is not a
+    question they can answer. `store.fetch_entities` has taken a session_id all along; only the MCP
+    surface never exposed it.
+    
+    `canonical_only=False` and `status=None` deliberately: this is a record of what THIS extraction
+    produced, not a view of what is currently live team-wide. Folding merged siblings or hiding
+    resolved items would make a replayed ingest return something different from the original for
+    reasons that have nothing to do with the transcript.
+    """
+    # An explicit map rather than pluralising the kind, so the wire names are visible here instead
+    # of being computed: a consumer's parser is keyed on them and they must not shift silently.
+    keys = {
+        "commitment": "commitments",
+        "decision": "decisions",
+        "open_question": "open_questions",
+        "blocker": "blockers",
+    }
+    out: dict[str, Any] = {}
+    for kind, key in keys.items():
+        rows = store.fetch_entities(
+            conn, kind=kind, session_id=session_id, status=None,
+            canonical_only=False, limit=500,
+        )
+        out[key] = [
+            {
+                "id": r["id"],
+                "confidence": r["confidence"],
+                **r["payload"],
+                # Every quote, because quote verification is the consumer's whole safety net: an item
+                # whose quote is not in the transcript is dropped rather than posted.
+                "quotes": [src.get("verbatim_quote", "") for src in r["sources"]],
+            }
+            for r in rows
+        ]
+    return out
+
+
 def _format_ingest(session_id: str, counts: dict[str, int], *, replayed: bool) -> str:
     total = sum(counts.values())
     head = "Already ingested" if replayed else f"Ingested {total} item(s)"
@@ -238,7 +308,7 @@ def _format_ingest(session_id: str, counts: dict[str, int], *, replayed: bool) -
     )
 
 
-async def _ingest_transcript(conn, args: dict[str, Any]) -> str:
+async def _ingest_transcript(conn, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Extract from `text` and persist, idempotently when `external_id` is given.
 
     Arguments are validated by hand because mcp 2.x does NOT validate against the tool's
@@ -260,15 +330,16 @@ async def _ingest_transcript(conn, args: dict[str, Any]) -> str:
     if source_label is not None and not isinstance(source_label, str):
         raise ValueError("'source_label' must be a string when given")
 
-    def _replay() -> str | None:
+    def _replay() -> tuple[str, dict[str, Any]] | None:
         """The first run's answer, if this external_id already landed one."""
         if not external_id:
             return None
         row = store.find_session_by_external_id(conn, external_id)
         if row is None:
             return None
-        return _format_ingest(
-            row["id"], store.count_entities_by_kind(conn, row["id"]), replayed=True
+        return (
+            _format_ingest(row["id"], store.count_entities_by_kind(conn, row["id"]), replayed=True),
+            {"session_id": row["id"], "replayed": True, **_session_items(conn, row["id"])},
         )
 
     # Checked BEFORE taking the lock, so a replay costs neither the wait nor the model call.
@@ -307,7 +378,10 @@ async def _ingest_transcript(conn, args: dict[str, Any]) -> str:
                 return hit
             raise
 
-    return _format_ingest(summary.session_id, summary.counts, replayed=False)
+    return (
+        _format_ingest(summary.session_id, summary.counts, replayed=False),
+        {"session_id": summary.session_id, "replayed": False, **_session_items(conn, summary.session_id)},
+    )
 
 
 # ----------------------- tool dispatch -----------------------
@@ -319,6 +393,9 @@ async def _call_tool(
 ) -> types.CallToolResult:
     name = params.name
     args = params.arguments or {}
+    # None for every tool but ingest_transcript. Declared here rather than only inside the branch so
+    # the non-ingest path cannot reach the return with the name unbound.
+    structured: dict[str, Any] | None = None
     conn = state.open_db()
     try:
         # ingest_transcript is handled here rather than in _dispatch_tool because it is the only
@@ -327,7 +404,12 @@ async def _call_tool(
         # stays synchronous for the seven read tools, which are microsecond SQLite reads. Inside the
         # same try, so the isError handling below covers it identically.
         if name == "ingest_transcript":
-            text = await _ingest_transcript(conn, args)
+            # The only tool that returns STRUCTURED content as well as prose. Its consumer is a
+            # program (Convaa's thread renderer) that needs each item's owner, deliverable, deadline
+            # and supporting quotes as fields -- a check like "is this quote a real substring of the
+            # transcript" cannot be built on a parsed Markdown sentence. The prose is kept too, so a
+            # model calling the same tool still gets something readable.
+            text, structured = await _ingest_transcript(conn, args)
         else:
             text = _dispatch_tool(conn, name, args)
     except Exception as exc:
@@ -344,7 +426,10 @@ async def _call_tool(
         )
     finally:
         conn.close()
-    return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+    result = types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+    if structured is not None:
+        result.structured_content = structured
+    return result
 
 
 def _dispatch_tool(conn, name: str, args: dict[str, Any]) -> str:
