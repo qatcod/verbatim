@@ -2,6 +2,48 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] — 2026-10-16
+
+### Fixed — extraction against a local model, which did not work at all
+
+The first run of this against a real local model failed outright, and the fixes below are all from
+that run rather than from review. Measured with ollama on one real standup transcript:
+
+| | before | after |
+|---|---|---|
+| qwen2.5:7b, extraction completes | **0/5** | **4/6** |
+| llama3.1:8b | 0/5 | 0/5 (never emits a tool call) |
+
+**The batch is now lenient and each item strict.** `ExtractionResult.model_validate` is
+all-or-nothing, so one malformed field anywhere discarded every commitment, decision, question and
+blocker in the transcript. In three of five runs the commitments were perfectly fine and were thrown
+away with a decision that was missing a label. `validate_extraction_leniently` keeps what validates,
+drops what does not, and the dropped items are printed with their failing field — a silent partial
+extraction looks exactly like a meeting with fewer commitments in it, which is the worst way for
+this to fail.
+
+**Three schema fields were strict in ways a local model cannot satisfy.** Ollama's
+OpenAI-compatible tool calling does not grammar-constrain output to the schema, so the model
+free-forms the JSON; on-prem Gather runs against whatever local model the customer has, and "works
+only with Claude" is not an option for an air-gapped deployment.
+
+- `Confidence` accepts any casing, and unwraps a single-key object (the model really returned
+  `"confidence": {"confidence": "HIGH"}`). The vocabulary stays closed — an unknown word still
+  raises, and a two-key object is still refused rather than guessed at.
+- `SourceReference.rationale` is optional. The **quote** is the load-bearing artefact: quote
+  verification checks it is a real substring of the transcript, which is what stops a fabricated
+  item reaching a team. The rationale is prose on top. Every consumer already guarded on truthiness
+  and `Decision.rationale` was already optional, so requiring it was the outlier.
+- `topic` is optional on `Decision` and `OpenQuestion`, which was the single most common omission.
+  `outcome` and `question` carry the substance and both stay required.
+
+**What this does not fix.** llama3.1:8b never emits a tool call, and qwen2.5:7b fails to about one
+run in three — a transient a caller's bounded retry handles, not a schema problem. And item quality
+is a separate matter from item validity: on a PERFECT transcript, qwen2.5:7b attached one person's
+"by end of day" commitment to another's Thursday deadline and missed a third entirely, with every
+quote it cited being genuine. Quote verification passes that item. A wrong owner is actively
+misleading where a wrong summary degrades gracefully.
+
 ## [0.16.0] — 2026-10-15
 
 ### Added — `ingest_transcript` returns structured items, not only prose
