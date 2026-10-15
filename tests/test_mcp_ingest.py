@@ -386,17 +386,46 @@ def test_an_existing_database_is_migrated_on_open(tmp_path):
 
     connect() runs executescript(SCHEMA) BEFORE _migrate(), so on a pre-existing database the
     CREATE TABLE is a no-op and a CREATE INDEX in SCHEMA references a column that does not exist
-    yet — `no such column: external_id`, on every open, for every existing install.
+    yet -- `no such column: external_id`, on every open, for every existing install.
+
+    The old database is built by executing the HISTORICAL `sessions` DDL, not by adding the column
+    and dropping it again. That shortcut is what a real old database is not, and it was also
+    version-fragile: `ALTER TABLE ... DROP COLUMN` rewrites the stored DDL text, and on CI's older
+    SQLite the rewrite left this table's inline column comment swallowing the closing paren
+    (`error in table sessions after drop column: incomplete input`). It passed on macOS's SQLite
+    3.53 and failed on all three CI versions.
     """
     p = tmp_path / "old.db"
-    c = store.connect(p)
-    store.insert_session(c, source_path="/m.txt", source_kind="transcript", model="m",
-                         meeting_summary="pre-existing", participants=["a"])
-    c.execute("DROP INDEX idx_sessions_external_id")
-    c.execute("ALTER TABLE sessions DROP COLUMN external_id")
-    c.close()
 
-    c = store.connect(p)  # must not raise
+    # Exactly the sessions table as it stood before external_id existed.
+    old_ddl = """
+    CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        source_path TEXT,
+        source_kind TEXT NOT NULL,
+        model TEXT NOT NULL,
+        meeting_summary TEXT,
+        participants_json TEXT NOT NULL DEFAULT '[]',
+        extracted_at TEXT NOT NULL,
+        transcript_chars INTEGER,
+        input_tokens INTEGER,
+        output_tokens INTEGER
+    );
+    """
+    raw = sqlite3.connect(p)
+    try:
+        raw.executescript(old_ddl)
+        raw.execute(
+            "INSERT INTO sessions (id, source_kind, model, meeting_summary, extracted_at) "
+            "VALUES ('s1', 'transcript', 'm', 'pre-existing', '2026-01-01T00:00:00Z')"
+        )
+        raw.commit()
+        cols = {r[1] for r in raw.execute("PRAGMA table_info(sessions)")}
+        assert "external_id" not in cols, "the fixture must start WITHOUT the column"
+    finally:
+        raw.close()
+
+    c = store.connect(p)  # must not raise, and must migrate in place
     try:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}
         names = {r["name"] for r in c.execute("PRAGMA index_list(sessions)")}
