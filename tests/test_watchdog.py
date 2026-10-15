@@ -616,6 +616,8 @@ def test_run_once_suppresses_alerts_on_save_state_failure(
 
 def test_watchdog_cmd_help() -> None:
     """The 'verbatim watchdog --help' command should show usage."""
+    import re
+
     from typer.testing import CliRunner
 
     from verbatim.cli import app
@@ -623,8 +625,15 @@ def test_watchdog_cmd_help() -> None:
     runner = CliRunner()
     r = runner.invoke(app, ["watchdog", "--help"])
     assert r.exit_code == 0
-    assert "--dry-run" in r.stdout
-    assert "--send-canary" in r.stdout
+    # Strip ANSI before matching. rich treats GitHub Actions as colour-capable (it
+    # keys off GITHUB_ACTIONS, so no workflow setting is involved), and when it
+    # colourises it splits an option name across several escape sequences --
+    # "\x1b[1;36m-\x1b[0m\x1b[1;36m-dry\x1b[0m\x1b[1;36m-run\x1b[0m" -- so the literal
+    # "--dry-run" is not a substring even though it is displayed correctly. Without
+    # this strip the test passes on a developer's terminal and fails only in CI.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
+    assert "--dry-run" in plain
+    assert "--send-canary" in plain
 
 
 def test_watchdog_cmd_calls_main_with_flags(monkeypatch, tmp_path: Path) -> None:
