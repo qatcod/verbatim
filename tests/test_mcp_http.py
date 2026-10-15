@@ -407,3 +407,47 @@ def test_ingest_transcript_works_over_the_http_transport(tmp_db_path, monkeypatc
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
     finally:
         conn.close()
+
+def test_structured_content_survives_the_http_transport(tmp_db_path, monkeypatch):
+    """The structured half has to arrive over the wire, not just exist in the handler.
+
+    It is a different field from `content` and goes through the SDK's own serialisation, so "the
+    handler returns it" and "a client receives it" are separate claims. The consumer is Convaa's
+    thread renderer reaching verbatim over exactly this transport.
+    """
+    from verbatim.extractor import ExtractionDiagnostics
+    from verbatim.schema import Commitment, Confidence, ExtractionResult, SourceReference
+
+    monkeypatch.setenv("VERBATIM_DB_PATH", str(tmp_db_path))
+
+    def fake_extract(transcript: str, **kwargs):
+        return (
+            ExtractionResult(
+                meeting_summary="m", participants=["ana"],
+                commitments=[Commitment(
+                    actor="ana", deliverable="ship the export", deadline="Friday",
+                    confidence=Confidence.HIGH,
+                    sources=[SourceReference(verbatim_quote="I'll ship the export", rationale="explicit")],
+                )],
+            ),
+            ExtractionDiagnostics(model="fake", input_tokens=1, output_tokens=1,
+                                  stop_reason="end_turn", transcript_chars=len(transcript)),
+        )
+
+    monkeypatch.setattr("verbatim.extractor.extract", fake_extract)
+
+    async def round_trip():
+        async with _mcp_session() as session:
+            return await session.call_tool(
+                "ingest_transcript",
+                {"text": "ana: I'll ship the export", "external_id": "wire-1"},
+            )
+
+    result = asyncio.run(round_trip())
+    sc = result.structuredContent if hasattr(result, "structuredContent") else result.structured_content
+    assert sc is not None, "structured content did not survive the transport"
+    c = sc["commitments"][0]
+    assert c["actor"] == "ana"
+    assert c["deadline"] == "Friday"
+    # The quote, which is what the consumer verifies against the transcript before posting.
+    assert c["quotes"] == ["I'll ship the export"]
