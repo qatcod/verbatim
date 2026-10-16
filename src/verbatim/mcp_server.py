@@ -13,6 +13,7 @@ Tools exposed:
 - verbatim_stats      — quick counts of open items
 - resolve_entity      — mark an entity as resolved
 - ingest_transcript   — extract + persist from transcript text (idempotent via external_id)
+- due_commitments     — open commitments overdue/due soon, with resolved dates + source session
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import json
 import os
 import sqlite3
 import weakref
+from datetime import date
 from typing import Any
 
 import mcp.types as types
@@ -150,6 +152,52 @@ async def _list_tools(
             },
         ),
         types.Tool(
+            name="due_commitments",
+            description=(
+                "Open commitments whose deadline has passed or is close, with the deadline resolved "
+                "to a date and the id of the session each came from. For a proactive nudge: it "
+                "answers 'what is outstanding and where was it promised'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "within_days": {
+                        "type": "integer",
+                        "description": (
+                            "How far ahead counts as due soon. Default 7. Overdue items are always "
+                            "included regardless of this."
+                        ),
+                        "minimum": 0,
+                        "maximum": 365,
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Only commitments by this person (case-insensitive).",
+                    },
+                },
+            },
+            # Declared because the consumer is a program deciding whether to post into somebody's
+            # thread. `session_external_id` is the field that makes a nudge land where the commitment
+            # was made, so it is named in the contract rather than left to be discovered.
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "today": {"type": "string", "description": "The date the statuses were computed against."},
+                    "within_days": {"type": "integer"},
+                    "commitments": {"type": "array", "items": {"type": "object"}},
+                    "unparsed": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": (
+                            "Open commitments with deadline TEXT that could not be resolved to a "
+                            "date. Reported, never silently dropped."
+                        ),
+                    },
+                },
+                "required": ["today", "within_days", "commitments", "unparsed"],
+            },
+        ),
+        types.Tool(
             name="ingest_transcript",
             description=(
                 "Extract commitments, decisions, open questions and blockers from a "
@@ -202,6 +250,110 @@ async def _list_tools(
         ),
     ]
     return types.ListToolsResult(tools=tools)
+
+
+# ----------------------- the proactive read -----------------------
+
+
+def _due_commitments(conn, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Open commitments that are overdue or due soon, with their source session.
+
+    Arguments validated by hand, as everywhere else here: mcp 2.x does not check `inputSchema`.
+
+    UNPARSED DEADLINES ARE RETURNED SEPARATELY rather than dropped, which is the same choice
+    `deadlines.parse_deadline` makes when it returns None instead of guessing. "Ship it when the
+    audit clears" is a real commitment with a real deadline that no parser should invent a date for,
+    and a consumer that never sees it cannot decide what to do about it. Silently dropping them
+    would make the list look complete when it is not.
+    """
+    from .deadlines import DUE_SOON_WINDOW_DAYS, days_until, due_status, parse_deadline
+
+    within = args.get("within_days", DUE_SOON_WINDOW_DAYS)
+    if isinstance(within, bool) or not isinstance(within, int):
+        raise ValueError("'within_days' must be an integer when given")
+    if not 0 <= within <= 365:
+        raise ValueError("'within_days' must be between 0 and 365")
+    actor = args.get("actor")
+    if actor is not None and not isinstance(actor, str):
+        raise ValueError("'actor' must be a string when given")
+
+    today = date.today()
+    rows = store.fetch_open_commitments_with_source(conn)
+
+    due: list[dict[str, Any]] = []
+    unparsed: list[dict[str, Any]] = []
+    for r in rows:
+        payload = r.get("payload") or {}
+        who = r.get("primary_actor") or payload.get("actor")
+        if actor and (who or "").strip().lower() != actor.strip().lower():
+            continue
+
+        text = r.get("deadline") or payload.get("deadline")
+        item = {
+            "id": r["id"],
+            "code": r.get("code"),
+            "actor": who,
+            "deliverable": payload.get("deliverable"),
+            "deadline_text": text,
+            "confidence": r.get("confidence"),
+            # The field that lets a nudge land in the conversation the commitment was made in,
+            # rather than in a separate view nobody opens.
+            "session_external_id": r.get("session_external_id"),
+        }
+
+        # A commitment with NO deadline at all is neither due nor unparsed -- there is nothing to be
+        # late for. Only deadline TEXT that failed to resolve belongs in `unparsed`.
+        if not (text or "").strip():
+            continue
+
+        parsed = parse_deadline(text, today=today)
+        if parsed is None:
+            unparsed.append(item)
+            continue
+
+        status = due_status(parsed, today=today, within_days=within)
+        if status in ("overdue", "due_today", "due_soon"):
+            item["deadline_date"] = parsed.isoformat()
+            item["due_status"] = status
+            item["days_until"] = days_until(parsed, today=today)
+            due.append(item)
+
+    # Overdue first, then soonest. A consumer that renders the list in order gets the right emphasis
+    # without having to know this ordering exists.
+    due.sort(key=lambda i: i["days_until"])
+
+    structured = {
+        "today": today.isoformat(),
+        "within_days": within,
+        "commitments": due,
+        "unparsed": unparsed,
+    }
+    return _format_due(due, unparsed, today=today.isoformat()), structured
+
+
+def _format_due(due: list[dict[str, Any]], unparsed: list[dict[str, Any]], *, today: str) -> str:
+    if not due and not unparsed:
+        return f"Nothing due as of {today}."
+    lines = [f"As of {today}:"]
+    if due:
+        lines.append("")
+        for i in due:
+            d = i["days_until"]
+            when = (
+                f"{-d} day(s) overdue" if d < 0 else "due today" if d == 0 else f"due in {d} day(s)"
+            )
+            who = i.get("actor") or "Unassigned"
+            lines.append(
+                f"- [{i['due_status']}] {who} — {i.get('deliverable') or '?'} "
+                f"({i.get('deadline_text')} → {i['deadline_date']}, {when})"
+            )
+    if unparsed:
+        lines.append("")
+        lines.append(f"{len(unparsed)} commitment(s) have a deadline that could not be read as a date:")
+        for i in unparsed:
+            who = i.get("actor") or "Unassigned"
+            lines.append(f"- {who} — {i.get('deliverable') or '?'} ({i.get('deadline_text')!r})")
+    return "\n".join(lines)
 
 
 # ----------------------- ingestion -----------------------
@@ -403,7 +555,11 @@ async def _call_tool(
         # block the event loop -- which under HTTP would stall every other request). _dispatch_tool
         # stays synchronous for the seven read tools, which are microsecond SQLite reads. Inside the
         # same try, so the isError handling below covers it identically.
-        if name == "ingest_transcript":
+        if name == "due_commitments":
+            # Structured, like ingest_transcript and for the same reason: the consumer is a program
+            # deciding whether to post into somebody's thread, not a model reading prose.
+            text, structured = _due_commitments(conn, args)
+        elif name == "ingest_transcript":
             # The only tool that returns STRUCTURED content as well as prose. Its consumer is a
             # program (Convaa's thread renderer) that needs each item's owner, deliverable, deadline
             # and supporting quotes as fields -- a check like "is this quote a real substring of the

@@ -173,6 +173,7 @@ _EXPECTED_TOOLS = [
     "recent_sessions",
     "verbatim_stats",
     "resolve_entity",
+    "due_commitments",
     "ingest_transcript",
 ]
 
