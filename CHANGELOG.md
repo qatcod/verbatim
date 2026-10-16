@@ -2,6 +2,49 @@
 
 All notable changes to Verbatim. This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] — 2026-10-16
+
+### Added — `due_commitments`, the read the proactive layer needs
+
+Open commitments that are overdue or due soon, with each deadline resolved to a calendar date, a due
+status, a signed day delta, and **the external id of the session the commitment came from**. That
+last field is the point: without it a consumer can tell that something is late and not *where it was
+promised*, which is the difference between a nudge in the conversation it belongs to and a
+notification in a tray nobody opens.
+
+Structured output plus prose, like `ingest_transcript`, because the consumer is a program deciding
+whether to post into somebody's thread.
+
+- Resolved commitments and merged duplicates are excluded — nudging about something already done is
+  the worst false positive available here, and nudging twice about one commitment said twice would
+  break the feature in exactly the case reconciliation exists for.
+- Overdue items are always included, whatever the `within_days` window. A window of 0 means
+  "nothing is due soon", not "ignore what is already late".
+- A commitment with **no** deadline is neither due nor unparsed; there is nothing to be late for.
+- Deadline text that could not be resolved is returned **separately**, never dropped. "Ship it when
+  the audit clears" is a real commitment that no parser should invent a date for, and a list that
+  silently omitted it would look complete when it is not.
+
+### Fixed — deadline wording that real speech produces
+
+Found by feeding the parser the phrases a live extraction actually returned, not by reading it. The
+first real standup extraction produced `"end of day"` and it came back unparsed — while `EOD`, the
+abbreviation of the same words, resolved fine.
+
+The cause is worth recording because it is a bug class rather than a missing word:
+`_STRIP_PREFIXES` is matched as `prefix + " "`, so an entry equal to the *whole* string never
+matches. `"by end of day"` fell through to the shorter `"by end of"`, leaving the bare word
+`"day"`, which parses as nothing. Whole-string filler is now resolved before the stripping loop.
+
+Also now parse: `EOW`; `end of month` / `EOM` (last day of the month, computed rather than
+tabulated, so February and leap years are right); a time of day on a date (`tomorrow morning` is
+tomorrow — the hour is not something a whole-day tracker can represent, and dropping the deadline
+because it mentioned one is the worse answer); and spelled-out counts (`in two days`, `a couple of
+days`, `in a few days`), because a transcript is speech and the spelled-out form is the common one.
+
+Still unparsed, deliberately: `ASAP`, `soon`, `next sprint`, `when the audit clears`. None of those
+carries a date, and a guessed one would look like a fact.
+
 ## [0.16.1] — 2026-10-16
 
 ### Fixed — extraction against a local model, which did not work at all

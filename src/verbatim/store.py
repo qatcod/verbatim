@@ -349,6 +349,50 @@ def insert_session(
     return session_id
 
 
+def fetch_open_commitments_with_source(
+    conn: sqlite3.Connection, *, limit: int = 500
+) -> list[dict[str, Any]]:
+    """Open, canonical commitments plus the EXTERNAL ID of the session each came from.
+
+    WHY A DEDICATED QUERY RATHER THAN fetch_entities. That function returns `session_id`, verbatim's
+    own id, and the proactive layer needs the CALLER'S id -- the one it passed as `external_id` when
+    it ingested the transcript. Without it a consumer cannot get from "this commitment is overdue"
+    back to "and here is the conversation it was made in", which is the whole shape of a nudge that
+    lands where the commitment was made rather than in a notification tray.
+
+    It is a separate function instead of a flag on fetch_entities because that one's row shape is
+    consumed in a dozen places; widening it for one caller is how a shape becomes impossible to
+    change later.
+
+    `canonical_id IS NULL` and `status = 'open'`: this answers "what is still outstanding", which is
+    the opposite question from the ingest result's "what did this extraction produce", and so takes
+    the opposite defaults. A resolved commitment must not be nudged about, and a duplicate folded
+    into a canonical must be nudged about ONCE, under the canonical.
+    """
+    rows = conn.execute(
+        """
+        SELECT e.id, e.code, e.session_id, e.confidence, e.status,
+               e.primary_actor, e.deadline, e.payload_json, e.created_at,
+               s.external_id AS session_external_id,
+               s.source_path AS session_source_path
+        FROM entities e
+        JOIN sessions s ON s.id = e.session_id
+        WHERE e.kind = 'commitment'
+          AND e.status = 'open'
+          AND e.canonical_id IS NULL
+        ORDER BY e.created_at ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["payload"] = json.loads(d.pop("payload_json") or "{}")
+        out.append(d)
+    return out
+
+
 def count_entities_by_kind(conn: sqlite3.Connection, session_id: str) -> dict[str, int]:
     """Per-kind entity counts for one session, zero-filled.
 

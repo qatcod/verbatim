@@ -2,9 +2,10 @@
 classification, and state.{deadlined,overdue,due_soon}_commitments."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 from verbatim import deadlines, state, web
@@ -255,3 +256,75 @@ def test_deadlines_link_in_sidebar(tmp_path: Path) -> None:
     client = TestClient(web.create_app(db_path=db))
     r = client.get("/")
     assert 'href="/deadlines"' in r.text
+
+
+# ----------------------- phrases a real transcript produced -----------------------
+#
+# Every case below comes from feeding the parser the wording that actually appears in speech, rather
+# than from reading the code and inventing inputs. The first live extraction of a standup returned
+# "end of day" verbatim and it came back unparsed, which is what prompted this.
+
+_FRIDAY = date(2026, 10, 16)
+
+
+@pytest.mark.parametrize("text", [
+    "end of day", "end of the day", "by end of day", "by the end of the day",
+    "eod", "EOD", "by EOD", "cob", "COB", "by close of business",
+    "close of business", "end of business", "end of the business day",
+    "today", "tonight", "this evening",
+])
+def test_whole_string_filler_means_today(text):
+    """The bug class: filler that IS the entire deadline, not a prefix to one.
+
+    `_STRIP_PREFIXES` matches `prefix + " "`, so an entry equal to the whole string never matched it
+    — "by end of day" fell through to the shorter "by end of", leaving the bare word "day", which
+    parses as nothing. The result was that "EOD" resolved to today and "by end of day" did not.
+    """
+    assert deadlines.parse_deadline(text, today=_FRIDAY) == _FRIDAY
+
+
+def test_a_time_of_day_does_not_change_the_date():
+    # The hour is not something a tracker working in whole days can represent, and dropping the
+    # whole deadline because it mentioned a time would be the worse answer.
+    for text in ("tomorrow morning", "tomorrow afternoon", "tomorrow evening", "tomorrow night"):
+        assert deadlines.parse_deadline(text, today=_FRIDAY) == date(2026, 10, 17), text
+
+
+def test_eow_matches_end_of_week():
+    assert deadlines.parse_deadline("EOW", today=_FRIDAY) == deadlines.parse_deadline("end of week", today=_FRIDAY)
+
+
+@pytest.mark.parametrize("text", ["end of month", "end of the month", "EOM", "month end"])
+def test_end_of_month_is_the_last_day_of_this_month(text):
+    assert deadlines.parse_deadline(text, today=_FRIDAY) == date(2026, 10, 31)
+
+
+def test_end_of_month_handles_february_and_leap_years():
+    # Computed by stepping to the first of the next month and back a day, so there is no table to
+    # get wrong.
+    assert deadlines.parse_deadline("EOM", today=date(2027, 2, 10)) == date(2027, 2, 28)
+    assert deadlines.parse_deadline("EOM", today=date(2028, 2, 10)) == date(2028, 2, 29)   # leap
+    assert deadlines.parse_deadline("EOM", today=date(2026, 12, 3)) == date(2026, 12, 31)  # year boundary
+
+
+@pytest.mark.parametrize("text,days", [
+    ("in two days", 2), ("two days", 2), ("in three days", 3), ("in ten days", 10),
+    ("a couple of days", 2), ("a couple days", 2), ("in a few days", 3),
+])
+def test_spelled_out_day_counts(text, days):
+    # A transcript is speech, so "in two days" is the common form and "in 2 days" the exotic one.
+    assert deadlines.parse_deadline(text, today=_FRIDAY) == _FRIDAY + timedelta(days=days)
+
+
+@pytest.mark.parametrize("text", [
+    "next sprint", "when the audit clears", "ASAP", "asap", "soon", "day",
+    "eventually", "after the release", "", "   ",
+])
+def test_genuinely_ambiguous_wording_still_returns_none(text):
+    """The parser's whole discipline, and the reason these additions are safe.
+
+    None is a real answer here: `due_commitments` reports an unparsed deadline separately rather
+    than dropping it, so a consumer sees "dan committed to ship it when the audit clears" and can
+    decide what to do. A guessed date would look like a fact and silently be wrong.
+    """
+    assert deadlines.parse_deadline(text, today=_FRIDAY) is None

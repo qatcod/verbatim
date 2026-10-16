@@ -16,6 +16,22 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 
+# A deadline that is ENTIRELY filler. Every one of these means "before the end of today" and none
+# of them carries a date, so they resolve to today rather than being stripped down to nothing.
+_MEANS_TODAY = frozenset({
+    "today", "tonight", "this evening",
+    "eod", "end of day", "end of the day", "by end of day", "by the end of the day", "by eod",
+    "cob", "close of business", "by cob", "by close of business",
+    "end of business", "end of the business day",
+})
+
+# Spelled-out day counts. One to ten only -- see the comment at the use site.
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "a": 1, "an": 1, "a couple of": 2, "a couple": 2, "a few": 3,
+}
+
 # How many days ahead still counts as "due soon".
 DUE_SOON_WINDOW_DAYS = 7
 
@@ -88,6 +104,17 @@ def parse_deadline(text: str | None, *, today: date | None = None) -> date | Non
     if iso is not None:
         return iso
 
+    # WHOLE-STRING FILLER MEANS TODAY, and this has to be checked BEFORE the stripping loop below.
+    #
+    # `_STRIP_PREFIXES` exists for filler that PRECEDES a date -- "by end of day Friday" -> "Friday".
+    # Each entry is matched as `prefix + " "`, so an entry that is the ENTIRE deadline never matches
+    # it: "by end of day" fell through to the shorter "by end of", which left the bare word "day",
+    # which parses as nothing. So "EOD" resolved to today and "by end of day" did not.
+    #
+    # Found by feeding the parser the phrases a real transcript produced rather than by reading it.
+    if s in _MEANS_TODAY:
+        return today
+
     # Strip leading filler words/phrases (longest first so "by eod" wins over "by").
     changed = True
     while changed:
@@ -98,19 +125,41 @@ def parse_deadline(text: str | None, *, today: date | None = None) -> date | Non
                 changed = True
         s = s.strip(" ,")
 
-    if s in ("today", "tonight", "this evening", "eod"):
+    # "end of day" spelled out, which was MISSING while "eod" worked -- an inconsistency found by
+    # feeding the parser the phrases a real transcript actually produced. The first live extraction
+    # of a standup returned "end of day" verbatim, and it came back unparsed while the abbreviation
+    # of the same words resolved fine.
+    if s in ("today", "tonight", "this evening", "eod", "end of day", "end of the day"):
         return today
-    if s in ("tomorrow", "tmrw", "tom"):
+    # A time of day on a date is still that date. "tomorrow morning" is tomorrow; the hour is not
+    # something a deadline tracker working in whole days can or should represent.
+    if s in ("tomorrow", "tmrw", "tom") or re.fullmatch(
+        r"tomorrow\s+(morning|afternoon|evening|night)", s
+    ):
         return today + timedelta(days=1)
     if s in ("next week", "end of next week"):
         return today + timedelta(days=7)
-    if s in ("this week", "end of week", "end of the week"):
+    if s in ("this week", "end of week", "end of the week", "eow"):
         return _next_weekday(today, 4)  # Friday of the current week-ish
+    # End of month: the LAST day of the current month, found by stepping to the first of the next
+    # month and back one day -- which handles February and leap years without a table.
+    if s in ("end of month", "end of the month", "eom", "month end"):
+        first_next = (
+            date(today.year + 1, 1, 1) if today.month == 12 else date(today.year, today.month + 1, 1)
+        )
+        return first_next - timedelta(days=1)
 
     # "in 3 days" / "3 days" / "in a week"
     m = re.fullmatch(r"(?:in\s+)?(\d+)\s+days?", s)
     if m:
         return today + timedelta(days=int(m.group(1)))
+    # And the same in words, because people SAY "in two days" and write "in 2 days". A transcript is
+    # speech, so the spelled-out form is the common one here rather than the exotic one. Capped at
+    # ten deliberately: past that, counting days is not how anyone expresses a deadline, and a long
+    # tail of number words is a parser pretending to understand more than it does.
+    m = re.fullmatch(rf"(?:in\s+)?({'|'.join(_NUMBER_WORDS)})\s+days?", s)
+    if m:
+        return today + timedelta(days=_NUMBER_WORDS[m.group(1)])
     if s in ("in a week", "a week"):
         return today + timedelta(days=7)
 
